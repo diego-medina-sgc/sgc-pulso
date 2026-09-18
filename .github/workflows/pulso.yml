@@ -17,6 +17,10 @@ name: Pulso
 #     puede tener nombres. En la salida publica solo hay cantidades.
 
 on:
+  schedule:
+    # a los 7 minutos de cada hora: a la hora en punto las colas de GitHub
+    # estan saturadas y la corrida puede arrancar muy tarde
+    - cron: '7 * * * *'
   workflow_dispatch:
     inputs:
       ensayo:
