@@ -57,12 +57,20 @@ jobs:
       - name: Instalar dependencias
         run: pip install --quiet -r build/requirements-pulso.txt
 
-      # El modelo de caras es publico (insightface): no hace falta cifrarlo.
+      # El modelo de caras es publico (YuNet de OpenCV y ArcFace de insightface):
+      # no hace falta cifrarlo. Se baja una vez y queda en la cache.
       - name: Modelo de caras
+        id: modelos
         uses: actions/cache@v4
         with:
           path: build/models
-          key: modelos-arcface-v1
+          key: modelos-yunet-arcface-v2
+
+      - name: Bajar el modelo de caras
+        if: steps.modelos.outputs.cache-hit != 'true'
+        run: |
+          cd build
+          python faces.py --bajar-modelos
 
       - name: Estado de la vuelta anterior (cifrado)
         id: cache
