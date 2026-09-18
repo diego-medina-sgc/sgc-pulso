@@ -100,10 +100,14 @@ def cifrar(carpeta):
     for n in archivos_estado():
         ruta = os.path.join(HERE, n)
         h = sha(ruta)
-        nuevo[n] = {"sha256": h, "bytes": os.path.getsize(ruta)}
+        # la fecha tambien viaja: pulso.py decide si un paso cambio por tamaño y
+        # fecha de sus .npz (archivos()), y un archivo descifrado hoy parece
+        # nuevo aunque sea el mismo. Sin esto, en cada vuelta corrian todos.
+        nuevo[n] = {"sha256": h, "bytes": os.path.getsize(ruta),
+                    "mtime": int(os.path.getmtime(ruta))}
         destino = os.path.join(carpeta, n + ".enc")
         if viejo.get(n, {}).get("sha256") == h and os.path.exists(destino):
-            continue
+            continue                       # el .enc sirve; el manifiesto se reescribe igual
         nonce = os.urandom(12)
         with open(ruta, "rb") as fh:
             datos = fh.read()
@@ -132,8 +136,11 @@ def descifrar(carpeta):
         datos = aes.decrypt(crudo[:12], crudo[12:], n.encode("utf-8"))
         if hashlib.sha256(datos).hexdigest() != info["sha256"]:
             sys.exit("%s no coincide con el manifiesto" % n)
-        with open(os.path.join(HERE, n), "wb") as fh:
+        ruta = os.path.join(HERE, n)
+        with open(ruta, "wb") as fh:
             fh.write(datos)
+        if info.get("mtime"):
+            os.utime(ruta, (info["mtime"], info["mtime"]))
     print("descifrados: %d archivos" % len(man))
 
 
