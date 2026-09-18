@@ -35,6 +35,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -161,8 +162,20 @@ def _pedir(cli, metodo, ruta, datos=None, tipo="application/octet-stream"):
         h["x-upsert"] = "true"
     req = urllib.request.Request("%s/storage/v1/%s" % (cli.url, ruta),
                                  data=datos, method=metodo, headers=h)
-    with urllib.request.urlopen(req, timeout=300) as r:
-        return r.read()
+    # Reintentos: el 18/9 un trozo de 45 MB volvio con 504 Gateway Timeout y
+    # tiro abajo la corrida entera, que en la anterior habia bajado todo bien.
+    # Un 404 no se reintenta: es "no existe" (el primer respaldo, por ejemplo).
+    for intento in range(6):
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or intento == 5:
+                raise
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if intento == 5:
+                raise
+        time.sleep(min(2 ** intento * 3, 60))
 
 
 def subir(carpeta):
