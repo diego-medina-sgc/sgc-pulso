@@ -23,6 +23,10 @@ on:
         description: 'Solo decir que correria, sin escribir nada'
         type: boolean
         default: false
+      paso:
+        description: 'Forzar un paso aunque no haya cambios (ej. referencias)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -91,10 +95,18 @@ jobs:
           python estado.py descifrar ../estado
 
       - name: Pulso
+        env:
+          # por variable y no pegado en el script: el valor no se interpreta
+          PASO: ${{ inputs.paso }}
+          ENSAYO: ${{ inputs.ensayo }}
         run: |
           cd build
           ARGS=""
-          if [ "${{ inputs.ensayo }}" = "true" ]; then ARGS="--ensayo"; fi
+          if [ "$ENSAYO" = "true" ]; then ARGS="--ensayo"; fi
+          if [ -n "$PASO" ]; then
+            case "$PASO" in *[!a-z_]*) echo "Paso invalido"; exit 1;; esac
+            ARGS="$ARGS --paso $PASO"
+          fi
           python -u pulso.py $ARGS
 
       - name: Guardar el estado
