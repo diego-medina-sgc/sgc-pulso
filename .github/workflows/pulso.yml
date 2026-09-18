@@ -1,0 +1,123 @@
+name: Pulso
+
+# El procesamiento de la biblioteca de fotos, cada hora.
+#
+# Antes corria en la notebook de Diego y se paraba cuando la cerraba: el 16 y
+# 17/9/2026 estuvo 39 horas sin correr y nada nuevo se reconocio. Aca corre
+# siempre. Es el mismo pulso.py, que ya estaba escrito para Linux.
+#
+# SEGURIDAD (control del 18/9/2026)
+#   - Solo arranca por horario o a mano. Ningun disparador corre codigo de un
+#     pull request, y los pull requests de terceros no reciben los secretos.
+#   - El estado entre corridas son huellas de caras: viaja cifrado
+#     (build/estado.py, AES-256-GCM) y la clave es un secreto. La cache de
+#     Actions de un repo publico la puede leer un pull request; cifrada no le
+#     sirve a nadie.
+#   - El log de cada paso queda en el runner (build/_pulso/*.log) y no se sube:
+#     puede tener nombres. En la salida publica solo hay cantidades.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ensayo:
+        description: 'Solo decir que correria, sin escribir nada'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pulso
+  cancel-in-progress: false
+
+jobs:
+  pulso:
+    runs-on: ubuntu-latest
+    # el reagrupamiento tarda casi una hora; GitHub corta a las 6
+    timeout-minutes: 350
+    env:
+      FACES_MOTOR: arcface
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: build/requirements-pulso.txt
+
+      - name: Instalar dependencias
+        run: pip install --quiet -r build/requirements-pulso.txt
+
+      # El modelo de caras es publico (insightface): no hace falta cifrarlo.
+      - name: Modelo de caras
+        uses: actions/cache@v4
+        with:
+          path: build/models
+          key: modelos-arcface-v1
+
+      - name: Estado de la vuelta anterior (cifrado)
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: estado
+          key: estado-${{ github.run_id }}
+          restore-keys: estado-
+
+      - name: Credenciales
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ESTADO_CLAVE: ${{ secrets.ESTADO_CLAVE }}
+          DRIVE_SERVICE_ACCOUNT: ${{ secrets.DRIVE_SERVICE_ACCOUNT }}
+        run: |
+          for v in SUPABASE_URL SUPABASE_SERVICE_KEY ESTADO_CLAVE DRIVE_SERVICE_ACCOUNT; do
+            if [ -z "${!v}" ]; then echo "Falta el secreto $v"; exit 1; fi
+          done
+          umask 077
+          printf 'SUPABASE_URL=%s\nSUPABASE_SERVICE_KEY=%s\nESTADO_CLAVE=%s\n' \
+            "$SUPABASE_URL" "$SUPABASE_SERVICE_KEY" "$ESTADO_CLAVE" > build/.env
+          printf '%s' "$DRIVE_SERVICE_ACCOUNT" > build/service-account.json
+
+      - name: Traer el estado
+        run: |
+          cd build
+          # sin cache (primera vez, o se vencio): del respaldo privado
+          if [ ! -f ../estado/manifiesto.json ]; then python estado.py bajar ../estado; fi
+          python estado.py descifrar ../estado
+
+      - name: Pulso
+        run: |
+          cd build
+          ARGS=""
+          if [ "${{ inputs.ensayo }}" = "true" ]; then ARGS="--ensayo"; fi
+          python -u pulso.py $ARGS
+
+      - name: Guardar el estado
+        id: guardar
+        if: success() && inputs.ensayo != true
+        run: |
+          cd build
+          if python estado.py cambio ../estado; then
+            echo "sin cambios en las huellas"
+            echo "cambio=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python estado.py cifrar ../estado
+          python estado.py subir ../estado
+          echo "cambio=si" >> "$GITHUB_OUTPUT"
+
+      - name: Guardar la cache
+        if: success() && (steps.guardar.outputs.cambio == 'si' || steps.cache.outputs.cache-matched-key == '')
+        uses: actions/cache/save@v4
+        with:
+          path: estado
+          key: estado-${{ github.run_id }}
+
+      - name: Limpiar credenciales
+        if: always()
+        run: rm -f build/.env build/service-account.json

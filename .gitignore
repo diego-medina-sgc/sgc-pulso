@@ -1,0 +1,10 @@
+.env
+*.npz
+*.npy
+*.log
+*.json
+*.tsv
+*.xlsx
+_*/
+models/
+__pycache__/

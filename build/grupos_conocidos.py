@@ -1,0 +1,162 @@
+# -*- coding: utf-8 -*-
+"""Marcar que grupos son de alguien que el padron ya sabe reconocer.
+
+POR QUE CAMBIA EL ORDEN DEL JUEGO
+
+El juego de grupos elige el grupo mas grande que quede sin nombre. Es un buen
+criterio -nombrar 300 caras de una vale mas que nombrar 3- pero no dice nada
+sobre lo que se GANA, y no es lo mismo.
+
+Si las caras del grupo ya se parecen a alguien del padron, ponerle el nombre
+agrega la referencia numero 21 a quien tiene 20. Medido dejandole k referencias
+a las 610 personas que tienen 8 o mas: con 6 el reconocimiento acierta 91,10% y
+con 8, 90,95%. De 6 para arriba no se gana nada.
+
+Si no se parecen a nadie, ese grupo es la unica forma de que esa persona exista
+para el sistema. Hay 1.409 personas en el padron con CERO referencias, y en
+confirmar no pueden aparecer nunca: para que haya pregunta hace falta una
+sugerencia, y para la sugerencia hace falta una referencia. Este juego es el
+unico lugar donde asoman, porque agrupa por parecido sin necesitar saber quien
+es nadie.
+
+LO QUE NO HAY QUE HACER CON ESTO
+
+Filtrar. La primera idea fue separar los grupos que son personas de los que son
+caras borrosas o de gente ajena, y medirlo fallo dos veces:
+
+  coherencia interna    1,00 en los 9.777 grupos, conocidos y desconocidos por
+                        igual. El agrupamiento une a 0,70, asi que por
+                        construccion todos salen compactos.
+
+  tamanio de la cara    mediana 0,0112 en los conocidos y 0,0106 en los
+  albumes, anios        desconocidos; albumes 1/1/2 en los dos; anios 1/1/1 en
+  caras por grupo       los dos.
+
+O sea que los desconocidos son indistinguibles de los conocidos en todo lo que
+se pudo medir, y los conocidos son personas de verdad por definicion. No hay
+evidencia de que el monton de desconocidos sea basura, asi que no se descarta
+nada: se ordena.
+
+COMO
+
+Un grupo es "conocido" si alguna de sus caras llega a 0,50 -el umbral con el
+que este proyecto aprueba una cara- contra alguna referencia del padron. Se
+escribe en face_group_meta.conocido y grupo_para_nombrar ordena por ahi antes
+que por tamanio.
+
+Corre despues del agrupamiento, que es quien arma face_group_meta.
+"""
+import os
+import sys
+from collections import defaultdict
+
+import numpy as np
+
+import faces
+import sb
+from faces_sugerir import todas_las_referencias
+
+CERCA = 0.50
+BLOQUE = 4096
+LOTE = 500
+TODAS = "_caras_todas_arcface.npz"
+
+
+def main():
+    sys.stdout.reconfigure(encoding="utf-8")
+
+    # El mismo freno que referencias_contar.py, y por lo mismo: los .npz llevan
+    # el sufijo del motor, asi que sin la variable se leen las huellas de otro
+    # motor y sale un resultado sin sentido en vez de un error.
+    if os.environ.get("FACES_MOTOR", "").lower() != faces.MOTOR or faces.MOTOR == "sface":
+        sys.exit("Falta FACES_MOTOR. En PowerShell: $env:FACES_MOTOR='arcface'")
+
+    cli = sb.SB()
+
+    print("Leyendo referencias…", flush=True)
+    vecs, _, _ = todas_las_referencias(cli)
+    R = vecs.astype(np.float32)
+    R = R / np.clip(np.linalg.norm(R, axis=1, keepdims=True), 1e-9, None)
+    print("  %d caras de referencia" % len(R))
+
+    if not os.path.exists(TODAS):
+        sys.exit("Falta %s: lo escribe faces_eventos.py" % TODAS)
+    z = np.load(TODAS, allow_pickle=True)
+    pid = [str(x) for x in z["photo_ids"]]
+    caja = z["cajas"]
+    H = z["vecs"].astype(np.float32)
+    H = H / np.clip(np.linalg.norm(H, axis=1, keepdims=True), 1e-9, None)
+    print("  %d caras en el archivo" % len(H))
+
+    donde = {}
+    for i, p in enumerate(pid):
+        b = caja[i]
+        donde[(p, round(float(b[0]), 2), round(float(b[1]), 2))] = i
+
+    print("Leyendo grupos…", flush=True)
+    grupos = defaultdict(list)
+    for r in cli.select("face_groups", select="photo_id,bx,by,grupo"):
+        i = donde.get((r["photo_id"], round(float(r["bx"]), 2),
+                       round(float(r["by"]), 2)))
+        if i is not None:
+            grupos[r["grupo"]].append(i)
+    print("  %d grupos con caras ubicadas" % len(grupos))
+
+    # UNA SOLA MULTIPLICACION GRANDE Y NO UNA POR GRUPO.
+    #
+    # Preguntarle a cada grupo por separado son 24.000 productos chicos contra
+    # una matriz de 19.727x512, y tarda un cuarto de hora. Se juntan todas las
+    # caras de todos los grupos, se hace el producto en bloques y despues se
+    # reparte por grupo: es el mismo calculo en menos de un minuto.
+    orden = sorted(grupos)
+    idx, corte = [], []
+    for g in orden:
+        corte.append(len(idx))
+        idx.extend(grupos[g])
+    corte.append(len(idx))
+
+    print("Comparando %d caras contra el padron…" % len(idx), flush=True)
+    mejor = np.empty(len(idx), dtype=np.float32)
+    V = H[idx]
+    for a in range(0, len(V), BLOQUE):
+        mejor[a:a + BLOQUE] = (V[a:a + BLOQUE] @ R.T).max(axis=1)
+
+    reparto = {0: [], 1: []}
+    for k, g in enumerate(orden):
+        trozo = mejor[corte[k]:corte[k + 1]]
+        reparto[int(len(trozo) and float(trozo.max()) >= CERCA)].append(g)
+
+    print("\n%d conocidos, %d que no se parecen a nadie"
+          % (len(reparto[1]), len(reparto[0])))
+
+    # VA POR PATCH Y NO POR UPSERT, Y NO ES UN DETALLE.
+    #
+    # PostgREST traduce el upsert a INSERT ... ON CONFLICT, y Postgres valida
+    # los NOT NULL al armar la tupla del INSERT, antes de enterarse de que
+    # habia conflicto. Mandar {"grupo": 267, "conocido": 1} sobre una fila que
+    # existe falla igual, pidiendo las columnas que no vienen en el payload:
+    #
+    #   23502  null value in column "caras" violates not-null constraint
+    #          Failing row contains (267, null, null, null, null, null, 1)
+    #
+    # Esta explicado en el docstring de sb.update y lo pise igual.
+    #
+    # Y el PATCH ademas hace lo correcto con los grupos que NO estan en
+    # face_group_meta -el 267 es uno-: no los inventa, no los toca. Esa tabla
+    # la arma el agrupamiento y solo guarda los grupos de mas de una cara; los
+    # de una sola no tienen fila y tampoco tienen por que tenerla.
+    #
+    # Son dos valores nada mas, asi que se agrupa por valor en vez de escribir
+    # fila por fila: 25.000 llamadas se vuelven unas cincuenta.
+    tocadas = 0
+    for valor, ids in reparto.items():
+        for i in range(0, len(ids), LOTE):
+            trozo = ids[i:i + LOTE]
+            cli.update("face_group_meta", {"conocido": valor},
+                       grupo="in.(%s)" % ",".join(str(x) for x in trozo))
+            tocadas += len(trozo)
+    print("marcados %d grupos en face_group_meta" % tocadas)
+
+
+if __name__ == "__main__":
+    main()

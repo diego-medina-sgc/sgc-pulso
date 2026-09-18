@@ -1,0 +1,12 @@
+# Lo que necesita el pulso para correr en GitHub Actions (18/9/2026).
+# Las mismas librerias que build/.venv-faces en la notebook.
+numpy>=2.0
+opencv-python-headless>=4.10
+onnxruntime>=1.20
+# google-auth necesita requests para refrescar el token de la service account
+google-auth>=2.30
+requests>=2.31
+# las listas de personas se leen como .xlsx exportado desde Drive
+openpyxl>=3.1
+# el estado entre corridas va cifrado con AES-256-GCM (build/estado.py)
+cryptography>=42
