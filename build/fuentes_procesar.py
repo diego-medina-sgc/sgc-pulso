@@ -144,8 +144,11 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     # 'descartada' y no 'error' (13/9/2026): no se rompio nada, la fuente se
     # leyo bien y el veredicto es que no sirve. Como error inflaba el aviso
     # fuentes_con_error de salud() con 30 carpetas que no hay que arreglar.
+    # Y desde el 19/9/2026 tampoco 'descartada': Diego saco ese estado ("nada
+    # anotado en Fuentes se descarta"). Sin nombres en los archivos, la fuente
+    # espera a que alguien diga quien esta: eso es 'a_mano'.
     if not resuelto and not sin_padron:
-        return ("descartada",
+        return ("a_mano",
                 "Ninguno de los %d archivos trae un nombre: son codigos de "
                 "camara. Esta fuente no sirve por el nombre del archivo."
                 % len(img),
@@ -240,8 +243,10 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     # "Logos", "Comprobante de pago", "Graphs", "Dibujos separados"- que
     # drive_faltantes.py encontro porque los archivos tenian nombres. Error
     # queda para lo que si hay que arreglar: bajar la foto, abrir la carpeta.
+    # 19/9/2026: queda 'listo' con 0 caras (se leyo entera y no habia gente),
+    # no 'descartada', que ya no existe.
     if not vecs and set(err) == {"no se detecto cara"}:
-        return ("descartada",
+        return ("listo",
                 "Se resolvieron %d nombres pero no hay ninguna cara en las "
                 "fotos (%d sin cara): no es una carpeta de gente."
                 % (len(resuelto), err["no se detecto cara"]),
