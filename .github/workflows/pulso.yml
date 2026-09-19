@@ -18,9 +18,13 @@ name: Pulso
 
 on:
   schedule:
-    # a los 7 minutos de cada hora: a la hora en punto las colas de GitHub
-    # estan saturadas y la corrida puede arrancar muy tarde
-    - cron: '7 * * * *'
+    # Cuatro intentos por hora, no uno. El horario de GitHub es "lo mejor que
+    # puede": la noche del 18 al 19/9, con un solo intento por hora, arranco
+    # 2 vueltas en 14 horas (07:16 y 12:27 UTC). La concurrencia de abajo no
+    # deja que se pisen, y una vuelta sin cambios termina en minutos. Los
+    # minutos de un repo publico no se cobran. Ademas, el repo principal lo
+    # dispara cada hora (disparar-pulso.yml).
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
     inputs:
       ensayo:
