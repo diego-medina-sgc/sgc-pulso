@@ -36,7 +36,10 @@ def main():
     # nivel 4 (sql/resolver_por_parecido.sql, 18/9/2026): el grupo se parece a
     # las caras confirmadas de una persona. De 0,65 para arriba las personas
     # contestaron 338 "si" y ningun "no"; 0,70 deja un escalon de margen.
-    ap.add_argument("--parecido", type=float, default=0.70)
+    # 0,65 desde el 19/9/2026: John contesto 36 grupos mas, todos "si", seis
+    # de ellos entre 0,60 y 0,65. Seguian en la cola 1.665 grupos entre 0,65 y
+    # 0,70 que casi seguro eran "si".
+    ap.add_argument("--parecido", type=float, default=0.65)
     ap.add_argument("--margen", type=float, default=0.10)
     # y solo con referencia solida: 10 fotos o mas, y no mas caras que esas
     ap.add_argument("--min-fotos", dest="min_fotos", type=int, default=10)
