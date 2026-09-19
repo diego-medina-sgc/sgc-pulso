@@ -53,6 +53,28 @@ import sb
 
 CORTE = 0.75        # dos caras de la misma persona
 CENTRO = 0.60       # cuánto tiene que acompañar al centro del grupo
+# UNIR GRUPOS CHICOS DE LA MISMA PERSONA (19/9/2026)
+#
+# Diego, mirando el juego: "creo que partis los grupos en 3 fotos o 2 y eso
+# hace que parezca repetido". Tenía razón: 18.375 de los 30.572 grupos
+# pendientes tenían 2 caras y 4.153 tenían 3, así que la misma persona volvía
+# a preguntarse una y otra vez, un grupo por evento.
+#
+# El encadenamiento de arriba compara CARA contra cara. Esto compara el CENTRO
+# de un grupo contra el de otro, que es mucho más estable: una foto de perfil
+# mueve una cara, no el promedio de todas.
+#
+# El corte se midió, no se eligió. Sobre 575 grupos sin nombre con caras
+# confirmadas cara por cara (165.025 pares):
+#
+#   corte   pares de la misma persona   pares de personas distintas
+#   0,55         75,1%                      3 de 164.675
+#   0,60         58,3%                      1 de 164.675  <-
+#   0,65         40,6%                      0 de 164.675
+#
+# Con 0,60 la cola del juego baja de 30.463 a 19.807 grupos y se dejan de
+# preguntar 10.106 grupos de 2 o 3 caras.
+UNIR = 0.60         # dos grupos que son la misma persona (0: no unir)
 BLOQUE = 512        # caras por vuelta; 512 x 450.000 son ~900 MB de cuenta
 
 
@@ -235,6 +257,8 @@ def main():
     ap.add_argument("--aplicar", action="store_true")
     ap.add_argument("--corte", type=float, default=CORTE)
     ap.add_argument("--centro", type=float, default=CENTRO)
+    ap.add_argument("--unir", type=float, default=UNIR,
+                    help="parecido entre centros de grupo para unirlos (0: no unir)")
     a = ap.parse_args()
 
     fotos, cajas, V, de_donde, quienes, confirmado = cargar()
@@ -412,6 +436,74 @@ def main():
         for m in fuera:
             limpios[-1 - m] = [m]
     grupos = {r: m for r, m in limpios.items() if m}
+
+    # ── pegar los grupos que son la misma persona ───────────────────────
+    #
+    # Segunda pasada, de grupo a grupo (ver UNIR arriba). Respeta lo mismo que
+    # la primera: un "no es" prohíbe la fusión, y dos grupos con caras
+    # confirmadas de personas DISTINTAS no se tocan aunque se parezcan. Va
+    # después de cortar las cadenas -así los centros son los del grupo ya
+    # limpio- y antes de partir los gigantes, que se encarga de lo que crezca
+    # de más.
+    if a.unir > 0:
+        t0 = time.time()
+        rs = [r for r, m in grupos.items() if len(m) >= 2]
+        if len(rs) > 1:
+            G = np.stack([V[grupos[r]].mean(axis=0) for r in rs])
+            G /= np.maximum(np.linalg.norm(G, axis=1, keepdims=True), 1e-9)
+            # los nombres confirmados y las prohibiciones de cada grupo entero
+            nom_g, veto_g = [], []
+            for r in rs:
+                nom_g.append({de_quien[m] for m in grupos[r] if m in de_quien})
+                v = set()
+                for m in grupos[r]:
+                    if m in prohibido:
+                        v |= prohibido[m]
+                veto_g.append(v)
+            pad2 = list(range(len(rs)))
+
+            def r3(x):
+                while pad2[x] != x:
+                    pad2[x] = pad2[pad2[x]]
+                    x = pad2[x]
+                return x
+
+            pares = []
+            for i0 in range(0, len(rs), BLOQUE):
+                S = G[i0:i0 + BLOQUE] @ G.T
+                fi, co = np.nonzero(S >= a.unir)
+                reales = fi + i0
+                quedan = co > reales
+                if quedan.any():
+                    pares.append(np.stack([S[fi[quedan], co[quedan]],
+                                           reales[quedan], co[quedan]]))
+            unidos_g = vetados_g = distintos_g = 0
+            if pares:
+                P = np.concatenate(pares, axis=1)
+                for k in np.argsort(-P[0]):
+                    x, y = r3(int(P[1][k])), r3(int(P[2][k]))
+                    if x == y:
+                        continue
+                    if nom_g[x] & veto_g[y] or nom_g[y] & veto_g[x]:
+                        vetados_g += 1
+                        continue
+                    # dos personas confirmadas distintas no son la misma
+                    if nom_g[x] and nom_g[y] and nom_g[x] != nom_g[y]:
+                        distintos_g += 1
+                        continue
+                    pad2[x] = y
+                    nom_g[y] |= nom_g[x]
+                    veto_g[y] |= veto_g[x]
+                    unidos_g += 1
+            if unidos_g:
+                nuevos = defaultdict(list)
+                for k, r in enumerate(rs):
+                    nuevos[r3(k)] += grupos.pop(r)
+                for k, m in nuevos.items():
+                    grupos[rs[k]] = m
+            print("grupos pegados a otro por parecido de centros (>= %.2f): %d"
+                  "   frenados por un 'no es': %d   por ser otra persona: %d   (%.0f s)"
+                  % (a.unir, unidos_g, vetados_g, distintos_g, time.time() - t0))
 
     # ── partir los gigantes ─────────────────────────────────────────────
     #
