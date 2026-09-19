@@ -122,11 +122,27 @@ TOPE_H = 6                # un paso que tarda mas que esto se corta
 LOCK_VIEJO_H = 12
 
 
-def paso(nombre, args, entradas, quieto=True, espera_max_h=ESPERA_MAX_H, cada_h=CADA_H):
+def paso(nombre, args, entradas, quieto=True, espera_max_h=ESPERA_MAX_H, cada_h=CADA_H,
+         sin_esperar_si=()):
     """espera_max_h=None: espera a que nadie juegue, por mas que tarde.
-    cada_h: minimo de horas entre dos corridas buenas (0: sin minimo)."""
+    cada_h: minimo de horas entre dos corridas buenas (0: sin minimo).
+    sin_esperar_si: entradas que, si cambiaron, hacen correr el paso aunque
+    alguien este jugando (ver SIN ESPERAR DESPUES DE REAGRUPAR)."""
     return {"nombre": nombre, "args": args, "entradas": entradas, "quieto": quieto,
-            "espera_max_h": espera_max_h, "cada_h": cada_h}
+            "espera_max_h": espera_max_h, "cada_h": cada_h,
+            "sin_esperar_si": tuple(sin_esperar_si)}
+
+
+# SIN ESPERAR DESPUES DE REAGRUPAR (19/9/2026)
+#
+# Reagrupar renumera todos los grupos. Hasta que corren parecidos y resolver,
+# los grupos que el sistema ya habia cerrado quedan sin marca (el panel decia
+# "0 cerrados solos" con 8.126), y los pares del juego apuntan a numeros que no
+# existen. Esos dos pasos esperaban a que nadie jugara, hasta ESPERA_MAX_H: el
+# 19/9 John jugo toda la tarde y quedaron parados. Diego: que corran siempre
+# enseguida despues de reagrupar. No renumeran nada, asi que no le cambian el
+# grupo en la mano a nadie; solo lo cierran si ya se sabe de quien es.
+DESPUES_DE_GRUPOS = ("paso:grupos",)
 
 
 # Entradas:  db:<clave de pulso_firmas>   npz:<nombre base, sin motor>
@@ -191,9 +207,11 @@ PASOS = [
     # que necesita los pares de ESTE agrupamiento. Con el orden de antes leia
     # los de la vuelta anterior, cuyos numeros de grupo ya no existen.
     paso("parecidos",      ["grupos_parecidos.py", "--aplicar"],
-         ["paso:grupos", "db:identificaciones", "db:rechazos"], quieto=True),
+         ["paso:grupos", "db:identificaciones", "db:rechazos"], quieto=True,
+         sin_esperar_si=DESPUES_DE_GRUPOS),
     paso("resolver",       ["grupos_resolver.py", "--escribir"],
-         ["paso:grupos", "paso:parecidos", "db:identificaciones"], quieto=True),
+         ["paso:grupos", "paso:parecidos", "db:identificaciones"], quieto=True,
+         sin_esperar_si=DESPUES_DE_GRUPOS),
     paso("gruposconocidos", ["grupos_conocidos.py"],
          ["paso:grupos", "npz:_referencias"], quieto=True),
     # Un carnet es de una persona: cuando figuran dos y la cara decide, se saca
@@ -357,7 +375,11 @@ def decidir(p, db, estados, forzar):
             (ahora() - ultimo_ok).total_seconds() // 60, p["cada_h"]), f, None
 
     tarde = ""
-    if p["quieto"]:
+    viejo = st.get("firma") or {}
+    urgente = [k for k in p.get("sin_esperar_si", ()) if k in f and viejo.get(k) != f[k]]
+    if urgente:
+        tarde = " (cambio %s: corre aunque alguien juegue)" % ", ".join(urgente)
+    elif p["quieto"]:
         act = fecha(db.get("actividad"))
         if act and ahora() - act < dt.timedelta(minutes=QUIETO_MIN):
             desde = fecha(st.get("esperando_desde")) or ahora()
