@@ -1,0 +1,6 @@
+# Lo que necesita el sync con Drive para correr en GitHub Actions (22/9/2026).
+# Es mucho menos que el pulso: no mide caras, solo lee el indice de Drive y
+# escribe en Supabase con urllib.
+# google-auth necesita requests para refrescar el token de la service account
+google-auth>=2.30
+requests>=2.31
