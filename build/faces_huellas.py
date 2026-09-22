@@ -66,6 +66,12 @@ def catalogo(cli):
     Las dos fuentes: Drive (North) y Zenfolio (Quilmes). Quilmes quedaba afuera
     porque sus imagenes necesitan sesion, y son 1.566 retratos sin una sola
     identificacion.
+
+    ZENFOLIO NO (22/9/2026). Desde que el pulso corre en GitHub no tiene las
+    claves de Zenfolio, y cada retrato nuevo de Quilmes hacia fallar el paso
+    (9 veces seguidas). Diego: "de zenfolio olvidate, prefiero que no aparezcan
+    las fotos con marca de agua". Solo Drive. Las huellas de Zenfolio que ya
+    estan guardadas no se tocan.
     """
     fol = {f["id"]: f for f in cli.select("folders", select="id,year,campus,is_mugshot,noise")
            if f.get("is_mugshot") and f.get("noise") is None}
@@ -77,7 +83,7 @@ def catalogo(cli):
                             folder_id="in.(%s)" % ",".join(ids[i:i + 40]))
     out = [(f["id"], f["folder_id"], fol[f["folder_id"]].get("year") or -1, f)
            for f in fotos
-           if f.get("source") in ("drive", "zenfolio") and not f.get("is_group")]
+           if f.get("source") == "drive" and not f.get("is_group")]
     out.sort(key=lambda t: t[0])
     return out
 

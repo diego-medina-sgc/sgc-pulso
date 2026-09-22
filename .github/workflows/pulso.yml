@@ -115,13 +115,6 @@ jobs:
           # por variable y no pegado en el script: el valor no se interpreta
           PASO: ${{ inputs.paso }}
           ENSAYO: ${{ inputs.ensayo }}
-          # Los retratos de Quilmes estan en Zenfolio: sin esto el paso
-          # "huellas" fallo desde el 17/9 (9 veces seguidas) y 28 retratos
-          # quedaron sin huella. Van al paso y no al .env: solo los lee
-          # zenfolio.py, y si faltan el resto del pulso sigue.
-          ZENFOLIO_USER: ${{ secrets.ZENFOLIO_USER }}
-          ZENFOLIO_ACCOUNT_PASSWORD: ${{ secrets.ZENFOLIO_ACCOUNT_PASSWORD }}
-          ZENFOLIO_PASSWORD: ${{ secrets.ZENFOLIO_PASSWORD }}
         run: |
           cd build
           ARGS=""
