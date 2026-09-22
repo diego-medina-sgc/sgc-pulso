@@ -261,6 +261,51 @@ def sync_unidad(drive, supa, fuente, a):
     token = state.get("page_token")
 
     if a.bootstrap or not token:
+        # UNA UNIDAD NUEVA SE RECORRE ENTERA (22/9/2026)
+        #
+        # Antes esto solo fijaba el token y decia "el contenido vino del crawl
+        # completo", que era cierto para Server Media -alguien lo habia
+        # indexado a mano antes- y falso para cualquier unidad que se sume
+        # despues. El 22/9 se sumo "Multimedia Drive", donde John venia
+        # cargando albumes: la primera corrida fijo el token y dejo afuera las
+        # 27 carpetas que ya estaban. Desde el token solo se ve lo que cambie
+        # DESPUES, asi que lo viejo no entraba nunca.
+        #
+        # Con --bootstrap no se recorre: esa bandera existe justo para decir
+        # "no mires el contenido, solo fija el token".
+        escrito = False
+        if not a.bootstrap:
+            print("Unidad nueva: se recorre entera…")
+            carpetas, fotos = recorrer(drive, root)
+            print("  %d carpetas, %d fotos" % (len(carpetas), len(fotos)))
+            if a.dry_run:
+                print("\n(dry-run: no se escribio nada)")
+                return False
+
+            def nivel_nuevo(cid):
+                n, actual = 0, cid
+                while actual in carpetas and carpetas[actual][1] in carpetas and n < 30:
+                    actual = carpetas[actual][1]
+                    n += 1
+                return n
+
+            # la raiz primero y sin madre, como las otras fuentes: las carpetas
+            # de arriba cuelgan de ella y folders tiene FK contra si misma
+            unidad = drive.get("drives/" + root, fields="id,name")
+            frows = [folder_row({"id": root, "name": unidad.get("name") or fuente["nombre"]},
+                                None, "", campus_de(fuente["sede"]))]
+            for cid in sorted(carpetas, key=nivel_nuevo):
+                f, parent = carpetas[cid]
+                frows.append(folder_row(f, parent, (f.get("name") or "").strip(),
+                                        campus_de(fuente["sede"])))
+            supa.upsert("folders", frows)
+            known = {r["id"] for r in frows}
+            prows = [photo_row(f, parent) for (f, parent) in fotos.values()
+                     if parent in known]
+            supa.upsert("photos", prows)
+            print("  escritas: %d carpetas, %d fotos" % (len(frows), len(prows)))
+            escrito = bool(frows or prows)
+
         r = drive.get("changes/startPageToken", driveId=root,
                       supportsAllDrives="true")
         tok = r["startPageToken"]
@@ -269,11 +314,12 @@ def sync_unidad(drive, supa, fuente, a):
                 "id": sid, "page_token": tok,
                 "last_run_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "last_status": "bootstrap",
-                "note": "token inicial; el contenido vino del crawl completo",
+                "note": ("token inicial despues del recorrido completo"
+                         if escrito else "token inicial, sin recorrer (--bootstrap)"),
             }])
         print("Token inicial fijado: %s" % tok)
         print("La proxima corrida ya sincroniza solo los cambios.")
-        return False
+        return escrito
 
     print("Sync desde el token guardado…")
 
@@ -341,8 +387,11 @@ def sync_unidad(drive, supa, fuente, a):
         c2, f2 = recorrer(drive, cid)
         changed_folders.update(c2)
         changed_photos.update(f2)
+        # candidatas y no arriba: una carpeta que llego por los cambios no esta
+        # en los dos primeros niveles, y el aviso cortaba la corrida entera con
+        # KeyError (22/9/2026, Server Media)
         print("     faltaba en la base: %s (%d carpetas, %d fotos adentro)"
-              % (arriba[cid][0].get("name"), len(c2), len(f2)))
+              % (candidatas[cid][0].get("name"), len(c2), len(f2)))
 
     if a.dry_run:
         print("\n(dry-run: no se escribio nada)")
