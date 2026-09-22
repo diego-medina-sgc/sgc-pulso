@@ -59,9 +59,11 @@ tarea. Lo que entra es la cara como referencia, que es lo que sirve para
 reconocer a esa persona en las fotos de evento que ya estan cargadas.
 """
 import argparse
+import json
 import os
 import re
 import sys
+import urllib.error
 from collections import Counter
 
 import numpy as np
@@ -70,7 +72,7 @@ import faces
 import sb
 from index_drive import Drive, SA_PATH
 from retratos_nombres import clave
-from valete_cargar import (a_quien_apunta, imagenes_recursivo, indexar_padron,
+from valete_cargar import (FOL, a_quien_apunta, imagenes_recursivo, indexar_padron,
                            medir_caras)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -111,6 +113,26 @@ def titulo_nombre(t):
     return " ".join(out)
 
 
+def cuenta_servicio():
+    """El mail con el que hay que compartir: sale de la credencial, no se copia."""
+    try:
+        with open(SA_PATH, encoding="utf-8") as fh:
+            return json.load(fh)["client_email"]
+    except Exception:
+        return "la cuenta de servicio del proyecto"
+
+
+def nombre_de_nota(nota):
+    """'Persona V (2004)' -> 'Persona V'. Saca lo que va entre
+    parentesis y los numeros sueltos; el resto lo decide a_quien_apunta."""
+    t = nota or ""
+    while "(" in t and ")" in t[t.index("("):]:
+        i = t.index("(")
+        t = t[:i] + " " + t[t.index(")", i) + 1:]
+    t = " ".join(w for w in t.split() if not w.isdigit())
+    return t.strip()
+
+
 def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     """Lee una carpeta de Drive con una foto por persona.
 
@@ -122,14 +144,40 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     if not fid:
         return "error", "El link no parece de Drive: no se le encuentra el id.", None, None
 
+    # PRIMERO QUE ES EL LINK (22/9/2026)
+    #
+    # Se listaba directo lo que cuelga del id. Si el id no se ve -no esta
+    # compartido con la cuenta del proyecto- Drive no da error al listar: da
+    # vacio. Y si el link es de UNA foto, tambien da vacio, porque de un archivo
+    # no cuelga nada. En los dos casos la fuente decia "la carpeta se abre pero
+    # no tiene imagenes", que era falso: la de Persona V (una foto suelta,
+    # sin compartir) se quedo asi. Ahora se mira el id antes de listar.
     try:
-        img = imagenes_recursivo(d, fid)
-    except Exception as e:
-        # el caso normal es que la cuenta del proyecto no tenga lectura
+        meta = d.get("files/" + fid, fields="id,name,mimeType")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            return ("error", "Drive no deja abrir el link (%s)." % str(e)[:120],
+                    None, None)
         return ("error",
-                "No se puede abrir la carpeta. Compartila con la cuenta de "
-                "servicio del proyecto como lectora. (%s)" % str(e)[:120],
-                None, None)
+                "Drive no encuentra el link con la cuenta del sistema: no esta "
+                "compartido. Compartilo como lector con %s y volve a anotarlo."
+                % cuenta_servicio(), None, None)
+
+    suelta = (meta.get("mimeType") or "").startswith("image/")
+    if suelta:
+        img = [meta]
+    elif meta.get("mimeType") == FOL:
+        try:
+            img = imagenes_recursivo(d, fid)
+        except Exception as e:
+            return ("error",
+                    "No se puede abrir la carpeta. Compartila con %s como "
+                    "lectora. (%s)" % (cuenta_servicio(), str(e)[:120]),
+                    None, None)
+    else:
+        return ("error",
+                "El link es un archivo pero no una imagen (%s): aca va una "
+                "carpeta o una foto." % meta.get("mimeType"), None, None)
 
     if not img:
         return ("error",
@@ -139,7 +187,18 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     campus = f.get("campus")
     coh = f.get("anio")
     fotos = [(x["id"], x["name"], campus, coh) for x in img]
-    resuelto, sin_padron, motivos = a_quien_apunta(idx, fotos)
+    # Una foto suelta viene con el nombre en la nota ("Persona V (2004)"),
+    # que escribio quien la cargo: el que carga es el juez de quien es la foto.
+    # Se prueba la nota primero y el nombre del archivo despues, que en una
+    # foto suelta suele ser un codigo de camara.
+    nota = nombre_de_nota(f.get("nota"))
+    if suelta and nota:
+        resuelto, sin_padron, motivos = a_quien_apunta(
+            idx, [(meta["id"], nota, campus, coh)])
+        if not resuelto:
+            resuelto, sin_padron, motivos = a_quien_apunta(idx, fotos)
+    else:
+        resuelto, sin_padron, motivos = a_quien_apunta(idx, fotos)
 
     # 'descartada' y no 'error' (13/9/2026): no se rompio nada, la fuente se
     # leyo bien y el veredicto es que no sirve. Como error inflaba el aviso
@@ -180,7 +239,7 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     #
     # Por defecto no, y esa es la regla de Diego: "el buscador de fotos con
     # nombre no deberia crear personas, las personas son las que estan". Asi
-    # entraron "Nini Supermercado" y "Persona V".
+    # entraron "Nini Supermercado" y "Persona W".
     #
     # Pero el mismo dia paso una carpeta con 60 fotos de ex staff, una por
     # persona y con el nombre en el archivo, y dijo "incorporalas al sistema".
@@ -191,12 +250,15 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     # ni en este codigo, que es el mismo: esta en quien dijo que eso es una
     # lista de personas. Por eso vive en la fila de la fuente, en da_de_alta, y
     # no en una decision del script.
+    # fuera del if: el resultado cuenta las altas aunque la fuente no de de
+    # alta, y sin esto una fuente comun cortaba al final con UnboundLocalError
+    # (22/9/2026, la de Persona V) despues de haber guardado las caras
+    nuevos = []
     if f.get("da_de_alta") and sin_padron:
         if not escribir:
             return ("pendiente",
                     "ENSAYO — %d imagenes · %d del padron · %d se darian de alta"
                     % (len(img), len(resuelto), len(sin_padron)), None, None)
-        nuevos = []
         for _, arch, nom, camp, c in sin_padron:
             # El nombre sale de como se llama el archivo, y eso viene como
             # viene: "malen esteves .jpg" entro al padron como "malen esteves",

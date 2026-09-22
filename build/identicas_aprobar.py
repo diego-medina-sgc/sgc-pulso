@@ -12,7 +12,7 @@ confirmar, si el dato ya lo tenías en el Drive con la foto con nombre?".
 
 El caso que miró: le preguntaba si una foto de la carpeta PROFESORES es Maureen
 Bond Field. Y sí, el dato estaba: en "Staff Mugshots" hay dos archivos que se
-llaman "Persona W", ya identificados. Lo que pasa es que son ARCHIVOS
+llaman "Persona X", ya identificados. Lo que pasa es que son ARCHIVOS
 DISTINTOS del mismo retrato -el fotógrafo entrega los suyos con código de
 cámara, y alguien renombra una copia- y pesan distinto, 4,8 MB contra 5,5, así
 que fotos_duplicadas.py no los une: su md5 no coincide.
