@@ -714,6 +714,22 @@ def main():
         print("\nCaras que comparten foto y recuadro (el npz de eventos no lo "
               "guarda): %d, se manda una" % chocadas)
 
+    # Solo caras de fotos que siguen en la base. El npz de caras se arma antes
+    # y guarda fotos que despues se borraron (duplicadas, fuera del archivo):
+    # el 22/9 una sola de esas corto la escritura con un 409 de clave foranea
+    # DESPUES del vaciado, y el juego de Grupos quedo con 9.000 caras de las
+    # que tenia. Se controla antes de vaciar, asi nunca queda a medias.
+    ids = sorted({f["photo_id"] for f in limpias})
+    vivas = set()
+    for k in range(0, len(ids), 150):
+        vivas.update(ph["id"] for ph in cli.select(
+            "photos", select="id", id="in.(%s)" % ",".join(ids[k:k + 150])))
+    borradas = len(ids) - len(vivas)
+    if borradas:
+        limpias = [f for f in limpias if f["photo_id"] in vivas]
+        print("Fotos que ya no estan en la base: %d, sus caras no se mandan"
+              % borradas)
+
     print("\nEscribiendo %d caras en %d grupos…"
           % (len(limpias), len({f["grupo"] for f in limpias})))
     # TRUNCATE y no DELETE, y TODOS los nombres, tambien los de grupos con
