@@ -72,7 +72,7 @@ def tiene_acentos(t):
     return any(unicodedata.combining(c) for c in unicodedata.normalize("NFD", t or ""))
 
 
-def nombre_que_gana(app, sheet):
+def nombre_que_gana(app, sheet, por_alias=False):
     """Entre dos escrituras del mismo nombre, la que tiene acentos.
 
     Todas las diferencias de nombre son de acentos o mayusculas: la comparacion
@@ -81,11 +81,19 @@ def nombre_que_gana(app, sheet):
     saca ("Persona AE" pierde las dos). Gana el que los tiene, venga
     de donde venga; si empatan, queda el de la app, que es lo que alguien vio.
     Decision de Diego, 23/9/2026."""
-    # Si las letras son distintas, el match vino por un ALIAS: la ficha se
-    # llama "Persona AF" y la planilla dice "Persona AG". Ahi no
-    # hay nada que discutir, la planilla es como se escribe esa persona.
-    if clave(app) != clave(sheet):
-        return sheet
+    # SI EL MATCH VINO POR UN ALIAS, EL NOMBRE NO SE TOCA (23/9/2026)
+    #
+    # Un alias existe porque alguien -o el propio sistema al contestar una
+    # dudosa- ya dijo "esta ficha tambien se llama asi". Eso no lo convierte en
+    # el nombre bueno: el sheet escribe "Persona AF" y la ficha se
+    # llama "Persona AG". Al resolver esa dudosa, la regla vieja renombro la
+    # ficha con el error de tipeo del sheet.
+    #
+    # Asi que por alias se completa (house, camada, sede) pero no se renombra.
+    # El nombre solo cambia entre dos escrituras del MISMO nombre, y ahi manda
+    # la que tiene acentos.
+    if por_alias or clave(app) != clave(sheet):
+        return app
     if tiene_acentos(sheet) and not tiene_acentos(app):
         return sheet
     if tiene_acentos(app) and not tiene_acentos(sheet):
@@ -263,12 +271,15 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True):
             ambiguas.append((s, cand))
             continue
         p = cand[0]
+        # por alias: el nombre del sheet no es el de la ficha ni una variante
+        # de acentos, es otra escritura que alguien acepto como suya
+        por_alias = clave(p.get("display_name")) != clave(s["nombre"])
         if s["nombre"] != p["display_name"]:
             # "hay correccion Y es la que esta puesta": sin el primer chequeo,
             # dos vacios se leen como "corregido a mano"
             if (p["id"], "nombre") in corr and corr[(p["id"], "nombre")] == p["display_name"]:
                 respetadas.append((p, "nombre", p["display_name"], s["nombre"]))
-            elif nombre_que_gana(p["display_name"], s["nombre"]) != p["display_name"]:
+            elif nombre_que_gana(p["display_name"], s["nombre"], por_alias) != p["display_name"]:
                 nombres.append((p, p["display_name"], s["nombre"]))
         # LO QUE FALTA SE COMPLETA, LO QUE ESTA NO SE PISA
         #

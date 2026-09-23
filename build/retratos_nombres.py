@@ -168,8 +168,8 @@ def anotar_nombres(cli, nuevos, fol):
     nombre y apellido en el padron. Si no esta, solo guardo foto y el nombre del
     archivo queda como referencia, no como persona".
 
-    Tiene razon y es la direccion correcta del flujo. "Persona AW.jpg" sirve
-    para encontrar a "Persona AW - Quilmes - 2004" en el padron. Si ese Diego
+    Tiene razon y es la direccion correcta del flujo. "Persona AG.jpg" sirve
+    para encontrar a "Persona AG - Quilmes - 2004" en el padron. Si ese Diego
     Medina no esta en ninguna planilla, lo que hay es una foto sin identificar y
     un nombre anotado; convertirlo en alumno es dejar que una carpeta le agregue
     filas a la lista de quienes existen.
@@ -252,7 +252,7 @@ def main():
     # ignorar a la mitad del padron a la hora de buscarlo.
     #
     # Lo levanto Diego mirando una carpeta de ex staff donde cada archivo se
-    # llama "Persona AX.JPG": "por lo menos tendrian que venir ya
+    # llama "Persona AW.JPG": "por lo menos tendrian que venir ya
     # confirmados". Hoy no hay ninguna foto de staff esperando por esto -se
     # midio: 12 retratos sin dueno con nombre de persona en el archivo, los 12
     # de alumnos- pero la carpeta que esta cargando es justamente de staff, asi
@@ -330,14 +330,14 @@ def main():
             # El nombre existe pero ninguno de esos pudo estar en la foto.
             #
             # En un colegio con historia el mismo nombre se repite entre padres
-            # e hijos: hay un Persona AY que se fue en 2003 y otro que
+            # e hijos: hay un Persona AX que se fue en 2003 y otro que
             # cursa en 2025. No es la misma ficha escrita de dos maneras, es
             # otra persona, asi que se da de alta en vez de descartar.
             #
             # No se dan de alta solos, y no por prudencia sino porque no se
             # puede: people tiene el nombre normalizado como clave unica, asi
             # que el alta pisaria la ficha del egresado en vez de crear otra.
-            # Y algunos son dudosos de verdad: "Persona AZ Arminio"
+            # Y algunos son dudosos de verdad: "Persona AY Arminio"
             # figura hasta 2020 y la foto es de 2025, que tanto puede ser la
             # hija como la planilla mal cargada. Se listan para mirar.
             if de_la_sede and anio and len(pal) >= 2:
