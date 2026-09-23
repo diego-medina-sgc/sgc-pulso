@@ -196,6 +196,37 @@ def main():
         cli.upsert("persona_grupos", filas_pg[i:i + 500], on_conflict="person_id,grupo")
     print("persona_grupos: %d filas" % len(filas_pg))
 
+    # PRIMERO LOS QUE LE FALTAN A QUIEN CASI NO TIENE FOTOS (23/9/2026)
+    #
+    # La cola ordenaba por tamaño: los grupos grandes primero, porque un "si"
+    # ahi etiqueta mas caras. Pero el que sufre no es el archivo, es la persona
+    # que tiene dos fotos mientras sus compañeros tienen doscientas -John
+    # encontro dos asi en K5 North-. Con persona_grupos ya se sabe de quien es
+    # cada grupo; aca se guarda cuantas fotos tiene el peor cubierto de ellos y
+    # grupo_para_nombrar ordena por ese numero.
+    #
+    # Se guarda en face_group_meta y no se calcula en la consulta: la cola se
+    # pide en cada vuelta del juego y contar fotos de 23.000 grupos ahi seria
+    # pagarlo en cada pregunta.
+    fotos = {int(r["person_id"]): int(r["n"]) for r in cli.rpc("fotos_por_persona") or []}
+    peor = {}
+    for f in filas_pg:
+        n_f = fotos.get(f["person_id"], 0)
+        g = f["grupo"]
+        if g not in peor or n_f < peor[g]:
+            peor[g] = n_f
+    print("Guardando el peor cubierto de %d grupos…" % len(peor), flush=True)
+    # agrupados por valor, como el conocido de arriba: son pocos valores
+    # distintos y asi son decenas de llamadas en vez de miles
+    por_valor = defaultdict(list)
+    for g, n_f in peor.items():
+        por_valor[n_f].append(g)
+    for valor, ids in por_valor.items():
+        for i in range(0, len(ids), LOTE):
+            trozo = ids[i:i + LOTE]
+            cli.update("face_group_meta", {"fotos_min": valor},
+                       grupo="in.(%s)" % ",".join(str(x) for x in trozo))
+
 
 if __name__ == "__main__":
     main()
