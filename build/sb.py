@@ -98,6 +98,8 @@ CLAVES = {
     "fuentes_fotos":         ("id",),
     # la cola de correcciones del padron que se escriben en el sheet (23/9/2026)
     "padron_cambios":        ("id",),
+    "persona_grupos":        ("person_id", "grupo"),
+    "padron_dudosas":        ("nombre",),
     "fusiones":              ("id",),
     "people":                ("id",),
     # Nacio el 12/9/2026 y nacio sin clave aca, asi que cada lectura avisaba

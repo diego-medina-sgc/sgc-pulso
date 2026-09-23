@@ -34,7 +34,7 @@ from retratos_nombres import clave
 
 
 def titulo(s):
-    """'Persona AY' -> 'Persona AY', sin tocar lo que ya viene bien escrito."""
+    """'Persona BA' -> 'Persona BA', sin tocar lo que ya viene bien escrito."""
     out = []
     for p in (s or "").split():
         out.append(p if (len(p) > 1 and p[1:].islower() and p[0].isupper()) else p.capitalize())

@@ -74,7 +74,7 @@ def main():
     cli = sb.SB()
 
     print("Leyendo referencias…", flush=True)
-    vecs, _, _ = todas_las_referencias(cli)
+    vecs, personas, _ = todas_las_referencias(cli)
     R = vecs.astype(np.float32)
     R = R / np.clip(np.linalg.norm(R, axis=1, keepdims=True), 1e-9, None)
     print("  %d caras de referencia" % len(R))
@@ -121,10 +121,40 @@ def main():
     for a in range(0, len(V), BLOQUE):
         mejor[a:a + BLOQUE] = (V[a:a + BLOQUE] @ R.T).max(axis=1)
 
+    # DE QUIEN SE PARECE, Y NO SOLO SI SE PARECE (23/9/2026)
+    #
+    # El maximo por cara decia "este grupo se parece a alguien del padron", que
+    # es lo que ordena la cola del juego. Falta lo otro: DE QUIEN. Diego lo
+    # pidio al ver que Persona Y y Persona Z tenian
+    # 4 y 2 fotos mientras sus companeros tenian 30 o 200: sus caras estaban en
+    # un grupo que nadie habia nombrado, y no habia forma de ir de la persona a
+    # su grupo sin esperar a que la cola lo ofreciera.
+    #
+    # Se guarda el mejor puntaje de cada (persona, grupo) por encima del corte:
+    # con eso el padron puede llevar de una ficha a sus grupos.
+    quien = np.empty(len(idx), dtype=np.int64)
+    for a in range(0, len(V), BLOQUE):
+        s = V[a:a + BLOQUE] @ R.T
+        mejor[a:a + BLOQUE] = s.max(axis=1)
+        quien[a:a + BLOQUE] = np.asarray(personas)[s.argmax(axis=1)]
+
     reparto = {0: [], 1: []}
+    filas_pg = []
     for k, g in enumerate(orden):
         trozo = mejor[corte[k]:corte[k + 1]]
         reparto[int(len(trozo) and float(trozo.max()) >= CERCA)].append(g)
+        # una fila por persona que aparece en el grupo, con su mejor cara
+        por_persona = {}
+        for pos in range(corte[k], corte[k + 1]):
+            if mejor[pos] < CERCA:
+                continue
+            pid = int(quien[pos])
+            if float(mejor[pos]) > por_persona.get(pid, 0):
+                por_persona[pid] = float(mejor[pos])
+        for pid, sc in por_persona.items():
+            filas_pg.append({"person_id": pid, "grupo": int(g),
+                             "puntaje": round(sc, 4),
+                             "caras": int(corte[k + 1] - corte[k])})
 
     print("\n%d conocidos, %d que no se parecen a nadie"
           % (len(reparto[1]), len(reparto[0])))
@@ -156,6 +186,15 @@ def main():
                        grupo="in.(%s)" % ",".join(str(x) for x in trozo))
             tocadas += len(trozo)
     print("marcados %d grupos en face_group_meta" % tocadas)
+
+    # persona -> grupos. Se reemplaza entera: los numeros de grupo cambian en
+    # cada reagrupamiento, asi que una fila vieja apunta a un grupo que ya no
+    # es el mismo (es el mismo motivo por el que face_group_names se vacia).
+    cli.rpc("persona_grupos_vaciar")
+    print("Guardando %d filas de persona -> grupo…" % len(filas_pg), flush=True)
+    for i in range(0, len(filas_pg), 500):
+        cli.upsert("persona_grupos", filas_pg[i:i + 500], on_conflict="person_id,grupo")
+    print("persona_grupos: %d filas" % len(filas_pg))
 
 
 if __name__ == "__main__":

@@ -77,12 +77,12 @@ def nombre_que_gana(app, sheet):
 
     Todas las diferencias de nombre son de acentos o mayusculas: la comparacion
     solo empareja cuando el nombre normalizado coincide. El sheet a veces los
-    agrega ("Persona AB" -> "Persona AB" con tilde) y a veces los
-    saca ("Persona AC" pierde las dos). Gana el que los tiene, venga
+    agrega ("Persona AD" -> "Persona AD" con tilde) y a veces los
+    saca ("Persona AE" pierde las dos). Gana el que los tiene, venga
     de donde venga; si empatan, queda el de la app, que es lo que alguien vio.
     Decision de Diego, 23/9/2026."""
     # Si las letras son distintas, el match vino por un ALIAS: la ficha se
-    # llama "Persona AD" y la planilla dice "Persona AE". Ahi no
+    # llama "Persona AF" y la planilla dice "Persona AG". Ahi no
     # hay nada que discutir, la planilla es como se escribe esa persona.
     if clave(app) != clave(sheet):
         return sheet
@@ -195,7 +195,7 @@ def parecidas(altas, por_clave):
     """De las altas, cuales se parecen a alguien que ya esta.
 
     Es la pregunta que decide si el sheet se puede aplicar: "Agustina Cabllero"
-    y "Persona AF" no son gente nueva, son Caballero y Canelotto mal
+    y "Persona AH" no son gente nueva, son Caballero y Canelotto mal
     tipeados. Darlos de alta seria crear el duplicado que acabamos de sacar.
 
     Se compara solo contra los que comparten alguna palabra -si no, son 1.600
@@ -223,8 +223,8 @@ def parecidas(altas, por_clave):
             r = difflib.SequenceMatcher(None, k, k2).ratio()
             # UNO CONTENIDO EN EL OTRO (23/9/2026)
             #
-            # difflib mira las letras, asi que "Persona AG Echegaray Santomil"
-            # y "Persona AH" dan 0,68 y pasaban como gente nueva: el
+            # difflib mira las letras, asi que "Persona AI Echegaray Santomil"
+            # y "Persona AJ" dan 0,68 y pasaban como gente nueva: el
             # sheet trae el nombre legal completo y la app el corto. Entraron
             # 140 duplicados asi antes de que esto estuviera. Dos palabras de
             # minimo para que "Persona U" no se coma a cualquier Juan.

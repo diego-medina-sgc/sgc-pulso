@@ -106,7 +106,7 @@ def clave(s):
 
 
 def titulo(s):
-    """'Persona Z' -> 'Persona Z'. La planilla trae el apellido en mayusculas."""
+    """'Persona AB' -> 'Persona AB'. La planilla trae el apellido en mayusculas."""
     out = []
     for p in (s or "").split():
         out.append(p if (len(p) > 1 and p[1:].islower()) else p.capitalize())
