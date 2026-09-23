@@ -154,6 +154,11 @@ PASOS = [
     # nuevo" (sql/fuentes_panel.sql). Antes que las caras: sin la persona en el
     # padron no hay a quien asignarle una cara.
     paso("listas",         ["listas_cargar.py", "--aplicar"], ["db:listas"], cada_h=0),
+    # Lo que Diego corrige en la pantalla del Padron -un nombre, una sede- va
+    # tambien a la hoja "Correcciones" del sheet del padron, para arreglar la
+    # planilla de la que salio el dato y no solo la app.
+    paso("padronsheet",    ["padron_sheet.py", "--aplicar"], ["db:padron_cambios"],
+         cada_h=0),
     paso("grupales",       ["retratos_grupales.py", "--aplicar"], ["db:retratos"]),
     paso("huellas",        ["faces_huellas.py"], ["db:retratos"]),
     # Los albumes de evento que no pasaron enteros por el detector: sin esto

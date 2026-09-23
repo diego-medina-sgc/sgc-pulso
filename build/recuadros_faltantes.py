@@ -7,7 +7,7 @@
 POR QUE
 
 Diego: "algunos recuadros de las etiquetas estan en cualquier lado de la foto
-en vez de en la cara". Mandó una foto con "Persona Z" arriba a la
+en vez de en la cara". Mandó una foto con "Persona AA" arriba a la
 izquierda, sobre el pasto.
 
 No era un error de dibujo: faltaba el dato. El 13/9/2026, de 25.984

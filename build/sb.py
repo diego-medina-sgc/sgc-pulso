@@ -96,6 +96,9 @@ CLAVES = {
     # las fuentes del panel (sql/fuentes.sql, 14/9/2026)
     "padron_fuentes":        ("clave",),
     "fuentes_fotos":         ("id",),
+    # la cola de correcciones del padron que se escriben en el sheet (23/9/2026)
+    "padron_cambios":        ("id",),
+    "fusiones":              ("id",),
     "people":                ("id",),
     # Nacio el 12/9/2026 y nacio sin clave aca, asi que cada lectura avisaba
     # "se pagina por desplazamiento y puede saltear filas". Con 4.761 filas
