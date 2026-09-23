@@ -151,6 +151,13 @@ def alumnos(h):
 
 
 def alumni(h):
+    """Exalumnos: nombre, sede, CAMADA y house.
+
+    De un exalumno no importan los años de cursada sino la camada de egreso
+    (Diego, 23/9/2026), que es la columna E. La F trae la house, y quien paso
+    por las dos etapas trae las dos: "Stevenson, Farran". En el padron se
+    guardan con " / ", que es como ya estan las 1.400 que hay.
+    """
     filas, i = leer(h, "Alumni")
     gente = {}
     for f in filas:
@@ -158,11 +165,13 @@ def alumni(h):
         if not nom or not ape:
             continue
         cam = col(f, i, "camada")
+        casa = " / ".join(x.strip() for x in col(f, i, "house").split(",") if x.strip())
         gente[clave(nom + " " + ape)] = {
             "nombre": titulo(nom + " " + ape),
             "sede": SEDES.get(col(f, i, "campus").lower())
                     or (col(f, i, "campus") or None),
-            "camada": int(cam) if cam.isdigit() else None}
+            "camada": int(cam) if cam.isdigit() else None,
+            "house": casa or None}
     return gente
 
 
@@ -239,7 +248,7 @@ def parecidas(altas, por_clave):
 
 
 def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True):
-    altas, nombres, sedes, respetadas, ambiguas = [], [], [], [], []
+    altas, nombres, sedes, respetadas, ambiguas, completar = [], [], [], [], [], []
     for k, s in gente.items():
         # el staff viene con su propia clave (apellido|nombre): para buscar en
         # el padron se usa el nombre completo
@@ -258,6 +267,18 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True):
                 respetadas.append((p, "nombre", p["display_name"], s["nombre"]))
             elif nombre_que_gana(p["display_name"], s["nombre"]) != p["display_name"]:
                 nombres.append((p, p["display_name"], s["nombre"]))
+        # LO QUE FALTA SE COMPLETA, LO QUE ESTA NO SE PISA
+        #
+        # La camada de egreso y la house de un exalumno son el dato que el
+        # sheet trae y el padron no tiene (5.421 fichas sin house). Se llenan
+        # solo si estan vacias: una house puesta a mano en la app no se toca,
+        # igual que la sede.
+        faltan = {}
+        for campo, valor in (("house", s.get("house")), ("cohort", s.get("camada"))):
+            if valor and not p.get(campo):
+                faltan[campo] = valor
+        if faltan:
+            completar.append((p, faltan))
         if campo_sede and s.get("sede") and s["sede"] != p.get("campus"):
             if (p["id"], "sede") in corr and corr[(p["id"], "sede")] == p.get("campus"):
                 respetadas.append((p, "sede", p.get("campus"), s["sede"]))
@@ -269,6 +290,9 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True):
     print("   sedes distintas:       %d" % len(sedes))
     print("   corregidas en la app:  %d  (el sheet no las pisa)" % len(respetadas))
     print("   ambiguas (2 fichas):   %d" % len(ambiguas))
+    if completar:
+        print("   fichas a completar:    %d  (house o camada que faltaban)"
+              % len(completar))
     par = parecidas(altas, por_clave)
     print("   de esas altas, %d se parecen a alguien que YA esta (serian duplicados)"
           % len(par))
@@ -283,7 +307,7 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True):
     for p, campo, valor, _ in respetadas[:5]:
         print("      queda:  %-32s %s = %s (corregido en la app)"
               % (p["display_name"][:32], campo, valor))
-    return {"altas": altas, "nombres": nombres, "sedes": sedes,
+    return {"altas": altas, "nombres": nombres, "sedes": sedes, "completar": completar,
             "respetadas": respetadas, "ambiguas": ambiguas, "por_clave": por_clave}
 
 
@@ -305,6 +329,10 @@ def aplicar(cli, res, kind, fuente):
     for p, viejo, nuevo in res["sedes"]:
         cli.update("people", {"campus": nuevo}, id="eq.%d" % p["id"])
         n_sede += 1
+    n_comp = 0
+    for p, faltan in res.get("completar", []):
+        cli.update("people", faltan, id="eq.%d" % p["id"])
+        n_comp += 1
 
     pares = parecidas(res["altas"], res["por_clave"])
     dudosas = {a for a, _, _ in pares}
@@ -330,6 +358,7 @@ def aplicar(cli, res, kind, fuente):
         nuevas.append({"display_name": x["nombre"], "norm_name": clave(x["nombre"]),
                        "kind": kind, "source": fuente, "campus": x.get("sede"),
                        "cohort": x.get("camada"), "year_code": x.get("year_code"),
+                       "house": x.get("house"),
                        "email": (x.get("mail") or None),
                        "photo_url": (x.get("foto") or None)})
 
@@ -350,8 +379,8 @@ def aplicar(cli, res, kind, fuente):
     for i in range(0, len(nuevas), 200):
         cli.upsert("people", nuevas[i:i + 200], on_conflict="norm_name,kind")
         n_alta += len(nuevas[i:i + 200])
-    print("   escrito: %d nombres, %d sedes, %d altas (%d dudosas sin crear)"
-          % (n_nom, n_sede, n_alta, len(dudosas)))
+    print("   escrito: %d nombres, %d sedes, %d completadas, %d altas "
+          "(%d dudosas sin crear)" % (n_nom, n_sede, n_comp, n_alta, len(dudosas)))
     return dudosas
 
 
