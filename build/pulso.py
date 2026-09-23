@@ -146,6 +146,7 @@ DESPUES_DE_GRUPOS = ("paso:grupos",)
 
 
 # Entradas:  db:<clave de pulso_firmas>   npz:<nombre base, sin motor>
+#            drive:<id de archivo>  (cuando lo tocaron por ultima vez)
 #            npz:<base>* (patron)          paso:<nombre> (cuando termino bien)
 PASOS = [
     paso("fuentes",        ["fuentes_procesar.py", "--aplicar"], ["db:fuentes"], cada_h=0),
@@ -157,8 +158,15 @@ PASOS = [
     # Lo que Diego corrige en la pantalla del Padron -un nombre, una sede- va
     # tambien a la hoja "Correcciones" del sheet del padron, para arreglar la
     # planilla de la que salio el dato y no solo la app.
+    # quieto=False en los dos: no tocan caras ni grupos, asi que no molestan a
+    # nadie jugando y no tienen por que esperar a que se vaya.
     paso("padronsheet",    ["padron_sheet.py", "--aplicar"], ["db:padron_cambios"],
-         cada_h=0),
+         quieto=False, cada_h=0),
+    # El padron unico: cuando Diego toca el sheet, entra solo. Las altas que se
+    # parecen a alguien que ya esta no se crean, quedan en padron_dudosas.
+    paso("padronunico",    ["padron_unico.py", "--aplicar"],
+         ["drive:1wlAT6t-0f7m7ZvxbC4k_zT4etCH_Pl8HRYIU-_U7hDU"],
+         quieto=False, cada_h=1),
     paso("grupales",       ["retratos_grupales.py", "--aplicar"], ["db:retratos"]),
     paso("huellas",        ["faces_huellas.py"], ["db:retratos"]),
     # Los albumes de evento que no pasaron enteros por el detector: sin esto
@@ -287,6 +295,27 @@ def archivos(base):
     return out
 
 
+# Cuando cambio un archivo de Drive. Es la unica entrada que no vive ni en la
+# base ni en el disco: el padron unico es un sheet, y sin esto no hay forma de
+# saber que Diego lo edito (23/9/2026). Se pregunta una vez por vuelta.
+_DRIVE = {}
+
+
+def drive_modificado(fid):
+    if fid in _DRIVE:
+        return _DRIVE[fid]
+    try:
+        from index_drive import Drive, SA_PATH
+        d = Drive(SA_PATH)
+        _DRIVE[fid] = d.get("files/" + fid, fields="modifiedTime").get("modifiedTime")
+    except Exception as e:
+        # sin respuesta no se inventa un valor: se deja el de la vuelta
+        # anterior, asi un corte de red no dispara el paso ni lo tapa
+        di("  (no se pudo mirar %s en Drive: %s)" % (fid[:12], str(e)[:80]))
+        _DRIVE[fid] = None
+    return _DRIVE[fid]
+
+
 def firma(p, db, estados):
     f = {}
     for e in p["entradas"]:
@@ -297,6 +326,10 @@ def firma(p, db, estados):
             f[e] = archivos(nombre)
         elif tipo == "paso":
             f[e] = (estados.get(nombre) or {}).get("ultimo_ok")
+        elif tipo == "drive":
+            v = drive_modificado(nombre)
+            f[e] = v if v is not None else (estados.get(p["nombre"]) or {}).get(
+                "firma", {}).get(e)
     return f
 
 
