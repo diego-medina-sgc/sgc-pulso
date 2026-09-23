@@ -181,7 +181,10 @@ def padron(cli):
     """El padron de hoy, indexado por nombre y por alias."""
     por_clave = defaultdict(list)
     gente = {}
-    for p in cli.select("people", select="id,display_name,norm_name,kind,campus,cohort,aliases,ex_staff"):
+    # house va en el select: sin el, "lo que ya esta" se leia como vacio y la
+    # regla de completar terminaba pisando (23/9/2026)
+    for p in cli.select("people", select="id,display_name,norm_name,kind,campus,"
+                                         "cohort,house,aliases,ex_staff"):
         if p.get("kind") == "noise":
             continue
         gente[p["id"]] = p
