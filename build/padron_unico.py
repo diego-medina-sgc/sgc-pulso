@@ -188,6 +188,7 @@ def alumni(h):
 def padron(cli):
     """El padron de hoy, indexado por nombre y por alias."""
     por_clave = defaultdict(list)
+    por_alias = defaultdict(list)
     gente = {}
     # house va en el select: sin el, "lo que ya esta" se leia como vacio y la
     # regla de completar terminaba pisando (23/9/2026)
@@ -199,7 +200,10 @@ def padron(cli):
         for k in {clave(p.get("display_name"))} | {clave(a) for a in (p.get("aliases") or [])}:
             if k:
                 por_clave[k].append(p)
-    return gente, por_clave
+        for a in (p.get("aliases") or []):
+            if clave(a):
+                por_alias[clave(a)].append(p)
+    return gente, por_clave, por_alias
 
 
 def corregidas(cli):
@@ -258,12 +262,49 @@ def parecidas(altas, por_clave):
     return out
 
 
-def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True):
+def por_un_alias(nombre, por_alias):
+    """La ficha cuyo ALIAS es casi este nombre.
+
+    POR QUE (23/9/2026). Diego corrigio su nombre en el sheet -"Diego Alejadro
+    Medina" -> "Persona AK"- y la lectura siguiente no lo reconocio:
+    el alias guardaba la version con el error, asi que el nombre corregido
+    parecia una persona nueva y volvia a la cola de dudosas. Preguntar dos veces
+    lo mismo, y encima por una correccion, es al reves de lo que tiene que
+    pasar.
+
+    Un alias no es un nombre cualquiera: esta ahi porque alguien contesto "es la
+    misma". Asi que una variante de tipeo de un alias es esa misma ficha. El
+    corte es alto -0,92- y tiene que haber una sola candidata.
+    """
+    import difflib
+    k = clave(nombre)
+    mejor, puntaje = None, 0.0
+    empate = False
+    for ka, ps in por_alias.items():
+        r = difflib.SequenceMatcher(None, k, ka).ratio()
+        if r < 0.92:
+            continue
+        for p in ps:
+            if mejor and p["id"] != mejor["id"] and abs(r - puntaje) < 0.01:
+                empate = True
+            if r > puntaje:
+                mejor, puntaje, empate = p, r, False
+    return None if (empate or not mejor) else mejor
+
+
+def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True, por_alias=None):
     altas, nombres, sedes, respetadas, ambiguas, completar = [], [], [], [], [], []
+    nuevos_alias = []
     for k, s in gente.items():
         # el staff viene con su propia clave (apellido|nombre): para buscar en
         # el padron se usa el nombre completo
         cand = por_clave.get(clave(s["nombre"]), [])
+        if not cand and por_alias:
+            # el nombre corregido de alguien que ya tiene alias
+            p_alias = por_un_alias(s["nombre"], por_alias)
+            if p_alias:
+                cand = [p_alias]
+                nuevos_alias.append((p_alias, s["nombre"]))
         if not cand:
             altas.append(s)
             continue
@@ -273,13 +314,17 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True):
         p = cand[0]
         # por alias: el nombre del sheet no es el de la ficha ni una variante
         # de acentos, es otra escritura que alguien acepto como suya
-        por_alias = clave(p.get("display_name")) != clave(s["nombre"])
+        # OJO: variable aparte. Antes se llamaba igual que el indice de alias
+        # que recibe la funcion y lo pisaba en la primera vuelta del for, asi
+        # que el reconocimiento por alias solo funcionaba para la primera
+        # persona de la hoja (23/9/2026).
+        via_alias = clave(p.get("display_name")) != clave(s["nombre"])
         if s["nombre"] != p["display_name"]:
             # "hay correccion Y es la que esta puesta": sin el primer chequeo,
             # dos vacios se leen como "corregido a mano"
             if (p["id"], "nombre") in corr and corr[(p["id"], "nombre")] == p["display_name"]:
                 respetadas.append((p, "nombre", p["display_name"], s["nombre"]))
-            elif nombre_que_gana(p["display_name"], s["nombre"], por_alias) != p["display_name"]:
+            elif nombre_que_gana(p["display_name"], s["nombre"], via_alias) != p["display_name"]:
                 nombres.append((p, p["display_name"], s["nombre"]))
         # LO QUE FALTA SE COMPLETA, LO QUE ESTA NO SE PISA
         #
@@ -321,8 +366,12 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True):
     for p, campo, valor, _ in respetadas[:5]:
         print("      queda:  %-32s %s = %s (corregido en la app)"
               % (p["display_name"][:32], campo, valor))
+    if nuevos_alias:
+        print("   nombres corregidos en el sheet que ya tenian alias: %d"
+              % len(nuevos_alias))
     return {"altas": altas, "nombres": nombres, "sedes": sedes, "completar": completar,
-            "respetadas": respetadas, "ambiguas": ambiguas, "por_clave": por_clave}
+            "respetadas": respetadas, "ambiguas": ambiguas, "por_clave": por_clave,
+            "alias": nuevos_alias}
 
 
 def aplicar(cli, res, kind, fuente):
@@ -347,6 +396,13 @@ def aplicar(cli, res, kind, fuente):
     for p, faltan in res.get("completar", []):
         cli.update("people", faltan, id="eq.%d" % p["id"])
         n_comp += 1
+    # la escritura nueva del sheet queda como alias: la proxima lectura la
+    # encuentra derecho, sin volver a pasar por el parecido
+    for p, nom in res.get("alias", []):
+        actuales = [a for a in (p.get("aliases") or []) if a]
+        if nom in actuales or nom == p.get("display_name"):
+            continue
+        cli.update("people", {"aliases": actuales + [nom]}, id="eq.%d" % p["id"])
 
     pares = parecidas(res["altas"], res["por_clave"])
     dudosas = {a for a, _, _ in pares}
@@ -409,7 +465,7 @@ def main():
         sys.exit("Falta el service account en %s" % SA_PATH)
     h = Hojas(SA_PATH)
     cli = sb.SB()
-    gente_db, por_clave = padron(cli)
+    gente_db, por_clave, por_alias = padron(cli)
     corr = corregidas(cli)
     print("Padron de hoy: %d fichas vivas.  Correcciones a mano: %d"
           % (len(gente_db), len(corr)))
@@ -420,7 +476,7 @@ def main():
         st = staff(h)
         print("\n(base: %d personas; por estado: %s)"
               % (len(st), dict(Counter(x["estado"] or "sin estado" for x in st.values()))))
-        res = comparar("Staff (hoja base)", st, por_clave, corr)
+        res = comparar("Staff (hoja base)", st, por_clave, corr, por_alias=por_alias)
         if a.aplicar:
             dudosas += sorted(aplicar(cli, res, "staff", "staff_sheet"))
             # El Status de la hoja dice quien sigue y quien se fue, que hasta
@@ -442,11 +498,11 @@ def main():
                 n_ex += 1
             print("   ex staff segun el Status de la hoja: %d fichas" % n_ex)
     if quiere in ("", "alumnos"):
-        res = comparar("Alumnos actuales", alumnos(h), por_clave, corr)
+        res = comparar("Alumnos actuales", alumnos(h), por_clave, corr, por_alias=por_alias)
         if a.aplicar:
             dudosas += sorted(aplicar(cli, res, "student", "planilla_alumnos"))
     if quiere in ("", "alumni"):
-        res = comparar("Alumni", alumni(h), por_clave, corr)
+        res = comparar("Alumni", alumni(h), por_clave, corr, por_alias=por_alias)
         if a.aplicar:
             dudosas += sorted(aplicar(cli, res, "student", "planilla_alumni"))
 
