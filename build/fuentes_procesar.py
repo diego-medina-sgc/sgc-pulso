@@ -104,7 +104,7 @@ def titulo_nombre(t):
     """"malen esteves" -> "Malen Esteves", sin tocar lo que ya esta bien.
 
     Solo sube la primera letra de cada palabra cuando la palabra viene entera
-    en minuscula. Asi no rompe "Mac Gaw", "O'Brien" ni "de la Torre": una
+    en minuscula. Asi no rompe "Persona V", "O'Brien" ni "de la Torre": una
     palabra que ya trae mayusculas adentro la escribio alguien a proposito.
     """
     out = []
@@ -123,7 +123,7 @@ def cuenta_servicio():
 
 
 def nombre_de_nota(nota):
-    """'Persona V (2004)' -> 'Persona V'. Saca lo que va entre
+    """'Persona W (2004)' -> 'Persona W'. Saca lo que va entre
     parentesis y los numeros sueltos; el resto lo decide a_quien_apunta."""
     t = nota or ""
     while "(" in t and ")" in t[t.index("("):]:
@@ -150,7 +150,7 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     # compartido con la cuenta del proyecto- Drive no da error al listar: da
     # vacio. Y si el link es de UNA foto, tambien da vacio, porque de un archivo
     # no cuelga nada. En los dos casos la fuente decia "la carpeta se abre pero
-    # no tiene imagenes", que era falso: la de Persona V (una foto suelta,
+    # no tiene imagenes", que era falso: la de Persona W (una foto suelta,
     # sin compartir) se quedo asi. Ahora se mira el id antes de listar.
     try:
         meta = d.get("files/" + fid, fields="id,name,mimeType")
@@ -187,7 +187,7 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     campus = f.get("campus")
     coh = f.get("anio")
     fotos = [(x["id"], x["name"], campus, coh) for x in img]
-    # Una foto suelta viene con el nombre en la nota ("Persona V (2004)"),
+    # Una foto suelta viene con el nombre en la nota ("Persona W (2004)"),
     # que escribio quien la cargo: el que carga es el juez de quien es la foto.
     # Se prueba la nota primero y el nombre del archivo despues, que en una
     # foto suelta suele ser un codigo de camara.
@@ -239,7 +239,7 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     #
     # Por defecto no, y esa es la regla de Diego: "el buscador de fotos con
     # nombre no deberia crear personas, las personas son las que estan". Asi
-    # entraron "Nini Supermercado" y "Persona W".
+    # entraron "Nini Supermercado" y "Persona X".
     #
     # Pero el mismo dia paso una carpeta con 60 fotos de ex staff, una por
     # persona y con el nombre en el archivo, y dijo "incorporalas al sistema".
@@ -252,7 +252,7 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     # no en una decision del script.
     # fuera del if: el resultado cuenta las altas aunque la fuente no de de
     # alta, y sin esto una fuente comun cortaba al final con UnboundLocalError
-    # (22/9/2026, la de Persona V) despues de haber guardado las caras
+    # (22/9/2026, la de Persona W) despues de haber guardado las caras
     nuevos = []
     if f.get("da_de_alta") and sin_padron:
         if not escribir:

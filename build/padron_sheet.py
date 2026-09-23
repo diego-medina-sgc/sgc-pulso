@@ -21,7 +21,7 @@ queda a la vista para arreglar la fuente de verdad.
 
 El nombre va entero, como quedo en la app, y no partido en Forename/Surname:
 partirlo es adivinar donde termina el nombre y empieza el apellido, que es
-justo el error que trajo "Persona Z".
+justo el error que trajo "Persona AA".
 
 QUE NECESITA
 
