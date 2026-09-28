@@ -67,6 +67,16 @@ TOPE = 600      # sql/grupos_gigantes.sql: arriba de esto el grupo no se pregunt
 CORTE = 0.60
 MARGEN = 0.10
 
+# Un grupo solo sirve de referencia de P si P esta en la mitad de sus fotos o
+# mas. Diego, 28/9/2026: una ficha de staff tenia 547 fotos de chicos. Su
+# referencia era un grupo de 584 caras de ~150 chicos donde ella aparecia en
+# 11 fotos: una sola cara confirmada alcanzaba para bautizar al grupo entero,
+# y el promedio de 584 caras de chicos se parece a cualquier chico. Medido ese
+# dia sobre las 331 referencias en uso: 302 con su dueño en el 90-100% de las
+# fotos, 20 por debajo del 20% (406 grupos nombrados, 374 de esa ficha) y apenas
+# 9 en el medio. Se corta en el hueco.
+PRESENCIA_REF = 0.50
+
 
 def clave_cara(foto, bx, by):
     """Una cara: foto y esquina del recuadro, redondeada como la guarda
@@ -178,6 +188,27 @@ def main():
     print("  grupos con caras confirmadas de UNA persona: %d   con caras confirmadas de dos o mas: %d   (%.0f s)"
           % (len(de_quien), mezclados, time.time() - t0))
 
+    # y que el dueño este en la mitad de las fotos del grupo (PRESENCIA_REF)
+    presentes = {(r["photo_id"], int(r["person_id"])) for r in
+                 cli.select("photo_people", select="photo_id,person_id")}
+    flojos, mezcla = [], set()
+    tramos = Counter()
+    for g, p in list(de_quien.items()):
+        ix = miembros[g]
+        con = sum(1 for i in ix if (fotos[i], p) in presentes)
+        tramos[min(9, int(10 * con / len(ix)))] += 1
+        if con < PRESENCIA_REF * len(ix):
+            flojos.append((len(ix), con, p))
+            del de_quien[g]
+            # tampoco se lo nombra por parecido: es una mezcla, no un grupo
+            mezcla.add(g)
+    print("  presencia del dueño en su grupo:  " + "  ".join(
+        "%d-%d%%: %d" % (t * 10, t * 10 + 10, tramos[t]) for t in range(10)))
+    print("  descartados como referencia (su dueño en menos del %d%% de las fotos): %d"
+          % (round(PRESENCIA_REF * 100), len(flojos)))
+    for tam, con, p in sorted(flojos, reverse=True)[:8]:
+        print("     %-28s en %d de %d" % (gente.get(p, "?")[:28], con, tam))
+
     # los nombres automaticos, contra esa verdad: cuanto le erra grupos_resolver
     auto = [g for g in de_quien if g in nombres]
     if auto:
@@ -212,7 +243,8 @@ def main():
                  gente.get(de_quien[gb], "?")[:28], meta[gb]))
 
     # ── cuantas preguntas saldrian ────────────────────────────────────────
-    sin_verdad = [g for g in grupos if g not in de_quien and g not in nombres]
+    sin_verdad = [g for g in grupos if g not in de_quien and g not in nombres
+                  and g not in mezcla]
     U = C[[pos[g] for g in sin_verdad]]
     mejor, segundo, dueno, ref_de = [], [], [], []
     for i in range(0, len(sin_verdad), 2048):
