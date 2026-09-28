@@ -44,6 +44,7 @@ EL CORTE NO SE ELIGE: SE MIDE
 Las huellas salen de caras_agrupar_archivo.cargar(), el mismo espacio con el
 que se armaron los grupos.
 """
+import json
 import os
 import sys
 import time
@@ -76,6 +77,16 @@ MARGEN = 0.10
 # fotos, 20 por debajo del 20% (406 grupos nombrados, 374 de esa ficha) y apenas
 # 9 en el medio. Se corta en el hueco.
 PRESENCIA_REF = 0.50
+
+# Un grupo nombrado por el sistema cuyo promedio no se parece a las caras
+# confirmadas de esa persona no es de ella (sql/caras_no_parecen.sql). Medido
+# el 28/9/2026 cara por cara: una confirmada contra el promedio de sus otras
+# confirmadas queda debajo de 0,30 el 7,5% de las veces; contra el de otra
+# persona, arriba de 0,30 el 0,12%. Por grupo el corte casi no importa: de
+# 5.128 grupos medibles, 2.904 quedan debajo de 0,20 y 3.093 de 0,40. Hacen
+# falta 3 caras confirmadas para tener un promedio de la persona.
+NO_SE_PARECE = 0.30
+MIN_CONFIRMADAS = 3
 
 
 def clave_cara(foto, bx, by):
@@ -150,6 +161,7 @@ def main():
              cli.select("people", select="id,display_name")}
     miembros = defaultdict(list)
     rep = {}                 # indice de cara -> clave foto|bx|by
+    crudo = {}               # indice de cara -> foto, bx, by tal como en la base
     central, mas_central = {}, {}   # grupo -> clave de su cara mas central
     for r in cli.select("face_groups", select="grupo,photo_id,bx,by,centro"):
         g = int(r["grupo"])
@@ -165,6 +177,7 @@ def main():
         if i is not None:
             miembros[g].append(i)
             rep[i] = k
+            crudo[i] = (r["photo_id"], r["bx"], r["by"])
 
     print("Leyendo las caras que confirmo una persona…", flush=True)
     cara, parejas, retratos = verdad_humana(cli, clave)
@@ -276,9 +289,43 @@ def main():
         print("     grupo de %4d caras  ->  %-28s %.3f  (segundo %.3f)"
               % (caras_sv[k], gente.get(int(dueno[k]), "?")[:28], mejor[k], segundo[k]))
 
+    # ── grupos nombrados por el sistema que no se parecen a su persona ──
+    confirmadas = defaultdict(list)
+    for i, p in cara.items():
+        confirmadas[p].append(i)
+    centro_de = {p: normal(normal(vecs[ix]).mean(axis=0, keepdims=True))[0]
+                 for p, ix in confirmadas.items() if len(ix) >= MIN_CONFIRMADAS}
+    no_parecen, grupos_malos, medidos = [], 0, 0
+    for g, (p, estado) in nombres.items():
+        if estado != "automatico" or p not in centro_de or g not in miembros:
+            continue
+        ix = [i for i in miembros[g] if i not in cara]
+        if not ix:
+            continue
+        medidos += 1
+        s = float(normal(normal(vecs[ix]).mean(axis=0, keepdims=True))[0] @ centro_de[p])
+        if s < NO_SE_PARECE:
+            grupos_malos += 1
+            for i in ix:
+                foto, bx, by = crudo[i]
+                no_parecen.append({"photo_id": foto, "bx": bx, "by": by,
+                                   "person_id": p, "parecido": round(s, 4)})
+    print("\nGRUPOS AUTOMATICOS QUE NO SE PARECEN A SU PERSONA (debajo de %.2f): %d de %d medibles, %d caras"
+          % (NO_SE_PARECE, grupos_malos, medidos, len(no_parecen)))
+
     if "--aplicar" not in sys.argv:
+        # para poder mirarla antes de aplicar
+        with open(os.path.join(os.path.dirname(__file__), "_no_parecen_ensayo.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(no_parecen, f)
         print("\nEnsayo: no se escribio nada. Agregar --aplicar. (%.0f s)" % (time.time() - t0))
         return
+
+    # Se anotan las caras (sobreviven a los reagrupamientos) y se deshace lo que
+    # el sistema habia puesto encima. El resolver ya no las vuelve a nombrar.
+    if no_parecen:
+        cli.upsert("caras_no_parecen", no_parecen, on_conflict="photo_id,bx,by,person_id")
+    print("  deshecho: %s" % cli.rpc("deshacer_no_parecen", {"p_ensayo": False}))
 
     # ── escribir los pares ────────────────────────────────────────────────
     #
