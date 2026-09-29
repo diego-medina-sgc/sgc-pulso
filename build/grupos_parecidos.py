@@ -155,7 +155,7 @@ def main():
     cli = sb.SB()
 
     print("Leyendo las huellas (el mismo espacio del agrupamiento)…", flush=True)
-    fotos, cajas, vecs, desc, _, _ = cargar()
+    fotos, cajas, vecs, desc, quienes, del_padron = cargar()
     print("  %s" % desc)
     clave = {}
     for i, f in enumerate(fotos):
@@ -313,14 +313,34 @@ def main():
             i = clave.get((s["photo_id"], round(float(s["bx"]), 4), round(float(s["by"]), 4)))
             if i is not None and i not in cara:
                 de_grupo[k[1]].append(i)
-    for p, ix in de_grupo.items():
+    def depuradas(ix):
+        """Sin las que no se parecen al promedio de las demas."""
         v = normal(vecs[ix])
         s = v @ normal(v.mean(axis=0, keepdims=True))[0]
-        confirmadas[p].extend(i for i, x in zip(ix, s) if x >= NO_SE_PARECE)
+        return [i for i, x in zip(ix, s) if x >= NO_SE_PARECE]
+
+    for p, ix in de_grupo.items():
+        confirmadas[p].extend(depuradas(ix))
+    # Los carnets (caras del padron), SOLO para quien no tiene ninguna cara
+    # confirmada por una persona: 64 fichas con 20+ automaticas no tenian otra.
+    # Medido el 28/9/2026 (build/_medir_por_carnets.py): un carnet contra la
+    # referencia humana de su persona da mediana 0,77 y queda debajo de 0,30 el
+    # 0,7%; contra otra persona, maximo 0,40. Pero 3 de 1.864 personas tienen
+    # los carnets a nombre de otro: por eso no se mezclan con una referencia
+    # humana, que manda.
+    carnets = defaultdict(list)
+    for i in np.flatnonzero(del_padron):
+        if int(quienes[i]) > 0 and i not in cara:
+            carnets[int(quienes[i])].append(int(i))
+    con_carnet = 0
+    for p, ix in carnets.items():
+        if not confirmadas.get(p):
+            confirmadas[p] = depuradas(ix)
+            con_carnet += 1
     centro_de = {p: normal(normal(vecs[ix]).mean(axis=0, keepdims=True))[0]
                  for p, ix in confirmadas.items() if len(ix) >= MIN_CONFIRMADAS}
-    print("\nReferencias para medir grupos automaticos: %d personas (%d con caras de Grupos)"
-          % (len(centro_de), sum(1 for p in de_grupo if p in centro_de)))
+    print("\nReferencias para medir grupos automaticos: %d personas (%d con caras de Grupos, %d solo con carnets)"
+          % (len(centro_de), sum(1 for p in de_grupo if p in centro_de), con_carnet))
     no_parecen, grupos_malos, medidos = [], 0, 0
     for g, (p, estado) in nombres.items():
         if estado != "automatico" or p not in centro_de or g not in miembros:
