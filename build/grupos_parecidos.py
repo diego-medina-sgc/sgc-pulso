@@ -373,6 +373,14 @@ def main():
         cli.upsert("caras_no_parecen", no_parecen, on_conflict="photo_id,bx,by,person_id")
     print("  deshecho: %s" % cli.rpc("deshacer_no_parecen", {"p_ensayo": False}))
 
+    # El paso "noparecen" del pulso corre esto DESPUES del resolver: despues de
+    # un reagrupamiento, "parecidos" no encuentra nombres automaticos (reagrupar
+    # los borra) y los grupos mal nombrados que pone el resolver vivian hasta
+    # la vuelta siguiente. Ahi solo interesa deshacer; los pares ya estan.
+    if "--solo-no-parecen" in sys.argv:
+        print("Listo, solo grupos que no se parecen. (%.0f s)" % (time.time() - t0))
+        return
+
     # ── escribir los pares ────────────────────────────────────────────────
     #
     # Un par por grupo sin nombre: el grupo confirmado mas parecido, si pasa

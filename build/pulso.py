@@ -225,6 +225,13 @@ PASOS = [
     paso("resolver",       ["grupos_resolver.py", "--escribir"],
          ["paso:grupos", "paso:parecidos", "db:identificaciones"], quieto=True,
          sin_esperar_si=DESPUES_DE_GRUPOS),
+    # Lo que el resolver acaba de nombrar, medido contra las caras de esa
+    # persona (sql/caras_no_parecen.sql). Sin este paso, despues de reagrupar
+    # un grupo mal nombrado vivia una vuelta entera: "parecidos" corre antes
+    # del resolver y reagrupar deja sin nombres automaticos que medir. Solo
+    # corre si el resolver corrio.
+    paso("noparecen",      ["grupos_parecidos.py", "--aplicar", "--solo-no-parecen"],
+         ["paso:resolver"], quieto=True, sin_esperar_si=("paso:resolver",)),
     paso("gruposconocidos", ["grupos_conocidos.py"],
          ["paso:grupos", "npz:_referencias"], quieto=True),
     # Un carnet es de una persona: cuando figuran dos y la cara decide, se saca
