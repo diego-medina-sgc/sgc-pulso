@@ -83,10 +83,20 @@ PRESENCIA_REF = 0.50
 # el 28/9/2026 cara por cara: una confirmada contra el promedio de sus otras
 # confirmadas queda debajo de 0,30 el 7,5% de las veces; contra el de otra
 # persona, arriba de 0,30 el 0,12%. Por grupo el corte casi no importa: de
-# 5.128 grupos medibles, 2.904 quedan debajo de 0,20 y 3.093 de 0,40. Hacen
-# falta 3 caras confirmadas para tener un promedio de la persona.
+# 5.128 grupos medibles, 2.904 quedan debajo de 0,20 y 3.093 de 0,40.
+#
+# La referencia de la persona suma, ademas de las confirmadas de a una, las
+# que confirmo una respuesta "si" de Grupos (photo_people 'grupo' con su
+# recuadro en face_suggestions). Sin ellas 215 fichas con 20+ automaticas no
+# se podian medir. Medido el 28/9/2026 (build/_medir_por_grupos.py): la
+# referencia por Grupos contra la de a una da mediana 0,88 y minimo 0,49 para
+# la misma persona, y maximo 0,34 para otra; y alcanza UNA cara: una sola
+# confirmada contra el resto de la persona da mediana 0,79, contra otra
+# persona nunca mas de 0,37. Las de Grupos se depuran antes (se sacan las que
+# no se parecen al promedio de las demas): un grupo contestado mirando 6
+# caras puede traer alguna ajena, como mucho el 7% medido.
 NO_SE_PARECE = 0.30
-MIN_CONFIRMADAS = 3
+MIN_CONFIRMADAS = 1
 
 
 def clave_cara(foto, bx, by):
@@ -293,8 +303,24 @@ def main():
     confirmadas = defaultdict(list)
     for i, p in cara.items():
         confirmadas[p].append(i)
+    # las de Grupos: foto 'grupo' de la persona + el recuadro de su cara
+    por_grupo_foto = {(r["photo_id"], int(r["person_id"])) for r in
+                      cli.select("photo_people", select="photo_id,person_id", source="eq.grupo")}
+    de_grupo = defaultdict(list)
+    for s in cli.select("face_suggestions", select="photo_id,person_id,bx,by", bw="gt.0"):
+        k = (s["photo_id"], int(s["person_id"]))
+        if k in por_grupo_foto:
+            i = clave.get((s["photo_id"], round(float(s["bx"]), 4), round(float(s["by"]), 4)))
+            if i is not None and i not in cara:
+                de_grupo[k[1]].append(i)
+    for p, ix in de_grupo.items():
+        v = normal(vecs[ix])
+        s = v @ normal(v.mean(axis=0, keepdims=True))[0]
+        confirmadas[p].extend(i for i, x in zip(ix, s) if x >= NO_SE_PARECE)
     centro_de = {p: normal(normal(vecs[ix]).mean(axis=0, keepdims=True))[0]
                  for p, ix in confirmadas.items() if len(ix) >= MIN_CONFIRMADAS}
+    print("\nReferencias para medir grupos automaticos: %d personas (%d con caras de Grupos)"
+          % (len(centro_de), sum(1 for p in de_grupo if p in centro_de)))
     no_parecen, grupos_malos, medidos = [], 0, 0
     for g, (p, estado) in nombres.items():
         if estado != "automatico" or p not in centro_de or g not in miembros:
