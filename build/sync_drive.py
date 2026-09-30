@@ -24,21 +24,38 @@ La primera corrida no tiene token. En vez de sincronizar el vacio, pide el
 token de arranque y sale sin tocar nada: lo que ya esta cargado vino del
 crawl completo, y desde ahi en adelante alcanza con los cambios.
 
+PUSH DE DRIVE (30/9/2026, docs/drive-push.md). Al final de cada corrida se
+crean o renuevan los canales de changes.watch (uno por unidad y uno de la
+cuenta de servicio) que avisan a la Edge Function drive-aviso, y si llego un
+aviso mientras la pasada corria se da otra (hasta 5). Sin DRIVE_AVISO_TOKEN en
+el ambiente, o sin las columnas canal_* en sync_state, no se hace nada de eso
+y el sync sigue como antes.
+
+POR QUE ES RAPIDO (30/9/2026). Una corrida sin novedades tardaba ~207 s y no
+era trabajo: eran ~770 llamadas HTTPS en fila, cada una con conexion nueva.
+Ahora las conexiones se reusan (una sesion por hilo), sync_state se lee una
+vez por pasada y se escribe una vez, Server Media pregunta que carpetas faltan
+en un solo viaje (rpc carpetas_faltantes, con la cuenta vieja si la funcion no
+existe) y las fuentes tipo carpeta se leen en paralelo (HILOS). Las
+escrituras de esas fuentes siguen siendo de a una, como antes.
+
 Uso:
     python sync_drive.py                # incremental
     python sync_drive.py --bootstrap    # solo fija el token, no sincroniza
     python sync_drive.py --dry-run      # muestra que haria
 """
 import argparse
+import datetime as _dt
 import json
 import os
-import re
 import sys
+import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 
+import requests
 from google.oauth2 import service_account
 import google.auth.transport.requests as gart
 
@@ -73,63 +90,131 @@ def env(name, *alts):
     return None
 
 
+# UNA SESION POR HILO (30/9/2026). urllib abria una conexion TLS nueva por
+# llamada; con ~770 llamadas por corrida eso era casi todo el tiempo. Una
+# requests.Session reusa la conexion, pero no se comparte entre hilos: cada hilo
+# tiene la suya.
+_HILO = threading.local()
+
+
+def _sesion(nombre):
+    s = getattr(_HILO, nombre, None)
+    if s is None:
+        s = requests.Session()
+        setattr(_HILO, nombre, s)
+    return s
+
+
+# Lo que un hilo imprime se junta y sale entero al terminar su fuente: si no,
+# las lineas de ocho fuentes en paralelo quedan mezcladas en el log.
+def _log(msg=""):
+    buf = getattr(_HILO, "buf", None)
+    if buf is None:
+        print(msg)
+    else:
+        buf.append(msg)
+
+
 class Drive:
+    RED = (requests.exceptions.RequestException, OSError)
+
     def __init__(self, sa_path):
         self.creds = service_account.Credentials.from_service_account_file(
             sa_path, scopes=["https://www.googleapis.com/auth/drive.readonly"])
-        self._refresh()
+        self._lock = threading.Lock()
+        self.expires = 0
+        self._token()
 
-    def _refresh(self):
-        self.creds.refresh(gart.Request())
-        self.expires = time.time() + 3000
+    def _token(self):
+        """El token vigente; lo renueva uno solo aunque pregunten ocho hilos.
 
-    def get(self, path, **params):
-        if time.time() > self.expires:
-            self._refresh()
-        url = ("https://www.googleapis.com/drive/v3/" + path + "?"
-               + urllib.parse.urlencode(params))
-        req = urllib.request.Request(
-            url, headers={"Authorization": "Bearer " + self.creds.token})
+        LA RENOVACION TAMBIEN REINTENTA. Las llamadas a la API reintentaban y
+        la renovacion no: un SSLEOFError de un segundo al renovar mato el
+        nocturno entero a los 8 minutos."""
+        with self._lock:
+            if time.time() > self.expires:
+                for i in range(6):
+                    try:
+                        self.creds.refresh(gart.Request())
+                        break
+                    except Exception:
+                        if i == 5:
+                            raise
+                        time.sleep(min(2 ** i, 30))
+                self.expires = time.time() + 3000
+            return self.creds.token
+
+    def _pedir(self, method, path, body=None, params=None, ok_404=False):
+        url = "https://www.googleapis.com/drive/v3/" + path
         for i in range(6):
+            h = {"Authorization": "Bearer " + self._token()}
             try:
-                with urllib.request.urlopen(req, timeout=90) as r:
-                    return json.load(r)
-            except urllib.error.HTTPError as e:
-                if e.code in (403, 429, 500, 502, 503) and i < 5:
-                    time.sleep(2 ** i)
-                    continue
-                detalle = e.read().decode("utf-8", "replace")[:400]
-                raise RuntimeError("Drive %s en %s: %s" % (e.code, path, detalle))
-            except (urllib.error.URLError, TimeoutError, OSError):
+                r = _sesion("drive").request(method, url, params=params, json=body,
+                                             headers=h, timeout=90)
+            except self.RED:
                 if i < 5:
                     time.sleep(min(2 ** i, 30))
                     continue
                 raise
+            if r.status_code < 300:
+                return r.json() if r.content else None
+            if ok_404 and r.status_code == 404:
+                return None
+            if r.status_code in (403, 429, 500, 502, 503) and i < 5:
+                time.sleep(2 ** i)
+                continue
+            raise RuntimeError("Drive %s en %s: %s" % (r.status_code, path, r.text[:400]))
+
+    def get(self, path, **params):
+        return self._pedir("GET", path, params=params)
+
+    def post(self, path, body, ok_404=False, **params):
+        return self._pedir("POST", path, body=body, params=params, ok_404=ok_404)
+
+
+class NoExiste(RuntimeError):
+    """PostgREST no encuentra la tabla, la columna o la funcion: lo del paso 1
+    de sql/drive_aviso.sql todavia no esta aplicado."""
+
+
+# codigos de PostgREST y de Postgres para "eso no existe"
+_NO_EXISTE = ("PGRST202", "PGRST204", "PGRST205", "42P01", "42703", "42883")
 
 
 class Supa:
+    RED = (requests.exceptions.RequestException, OSError)
+
     def __init__(self, url, key):
         self.url = url.rstrip("/")
         self.h = {"apikey": key, "Authorization": "Bearer " + key,
                   "Content-Type": "application/json"}
 
-    def _call(self, method, path, body=None, prefer=None):
+    def _call(self, method, path, body=None, prefer=None, timeout=240):
         h = dict(self.h)
         if prefer:
             h["Prefer"] = prefer
         data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
-        req = urllib.request.Request(self.url + "/rest/v1/" + path,
-                                     data=data, method=method, headers=h)
         for i in range(4):
             try:
-                with urllib.request.urlopen(req, timeout=240) as r:
-                    raw = r.read()
-                    return json.loads(raw) if raw else None
-            except urllib.error.HTTPError as e:
-                if i == 3:
-                    raise RuntimeError("%s %s -> %s %s" % (
-                        method, path, e.code, e.read().decode("utf-8", "replace")[:300]))
-                time.sleep(2 * (i + 1))
+                r = _sesion("supa").request(method, self.url + "/rest/v1/" + path,
+                                            data=data, headers=h, timeout=timeout)
+            except self.RED:
+                if i < 3:
+                    time.sleep(2 * (i + 1))
+                    continue
+                raise
+            if r.status_code < 300:
+                return r.json() if r.content else None
+            detalle = r.text[:300]
+            if any(c in detalle for c in _NO_EXISTE):
+                raise NoExiste("%s %s -> %s %s" % (method, path.split("?")[0],
+                                                   r.status_code, detalle))
+            # lo que es del pedido (400, 401, 404, 409) no cambia reintentando
+            if r.status_code in (408, 429) or r.status_code >= 500:
+                if i < 3:
+                    time.sleep(2 * (i + 1))
+                    continue
+            raise RuntimeError("%s %s -> %s %s" % (method, path, r.status_code, detalle))
 
     def select(self, path):
         return self._call("GET", path)
@@ -155,16 +240,7 @@ class Supa:
             off += 1000
 
     def rpc(self, fn, args):
-        req = urllib.request.Request(self.url + "/rest/v1/rpc/" + fn,
-                                     data=json.dumps(args).encode(),
-                                     method="POST", headers=self.h)
-        try:
-            with urllib.request.urlopen(req, timeout=300) as r:
-                raw = r.read()
-                return json.loads(raw) if raw else None
-        except urllib.error.HTTPError as e:
-            raise RuntimeError("rpc %s -> %s %s" % (
-                fn, e.code, e.read().decode("utf-8", "replace")[:300]))
+        return self._call("POST", "rpc/" + fn, args, timeout=300)
 
 
 # ---------------------------------------------------------------- mapeo
@@ -173,7 +249,7 @@ def campus_de(sede):
     """La sede de la fuente, tal como va en cada carpeta.
 
     'Ambas' no es una sede: es una carpeta que tiene fotos de los dos campus.
-    Diego, 16/9/2026, sobre las de Alumni: "hay de los dos campus". Estamparle
+    Decision del 16/9/2026, sobre las de Alumni: "hay de los dos campus". Estamparle
     North o Quilmes seria repartir mal la mitad de las fotos, y eso no se nota
     nunca. Va nulo, que es como la app ya escribe "no se de que sede es":
     labeling_by_kind y confirmar_candidatas filtran con
@@ -253,11 +329,46 @@ def estado_id(fuente):
     return "drive" if fuente["id"] == ROOT_ID else "drive:" + fuente["id"]
 
 
-def sync_unidad(drive, supa, fuente, a):
+# Lo que falta del paso 1 de sql/drive_aviso.sql se avisa una vez por corrida
+# y se sigue como antes: el push no puede romper el sync.
+_AVISADO = set()
+
+
+def avisar_una_vez(clave, msg):
+    if clave not in _AVISADO:
+        _AVISADO.add(clave)
+        _log("  aviso: " + msg)
+
+
+def faltan_en_folders(supa, ids):
+    """De una lista de ids de carpetas, las que no estan en folders.
+
+    Un viaje por cada 1.000 ids a carpetas_faltantes (el POST lleva la lista en
+    el cuerpo), en vez de un GET cada 100. De a 1.000 porque PostgREST corta la
+    respuesta en 1.000 filas sin avisar: con 1.000 ids nunca vuelven mas. Si la
+    funcion no existe todavia, la cuenta de siempre."""
+    ids = sorted(set(ids))
+    if "carpetas_faltantes" not in _AVISADO:
+        try:
+            faltan = set()
+            for i in range(0, len(ids), 1000):
+                faltan |= set(supa.rpc("carpetas_faltantes", {"p_ids": ids[i:i + 1000]}) or [])
+            return faltan
+        except NoExiste as e:
+            avisar_una_vez("carpetas_faltantes",
+                           "no existe rpc carpetas_faltantes (falta sql/drive_aviso.sql): "
+                           "se pregunta de a 100 como antes (%s)" % str(e)[:160])
+    estan = set()
+    for i in range(0, len(ids), 100):
+        estan |= {r["id"] for r in supa.select(
+            "folders?select=id&id=in.(%s)" % ",".join(ids[i:i + 100])) or []}
+    return {c for c in ids if c not in estan}
+
+
+def sync_unidad(drive, supa, fuente, a, state):
     """Una unidad compartida, por la Changes API. Devuelve si escribio algo."""
     root = fuente["id"]
     sid = estado_id(fuente)
-    state = (supa.select("sync_state?id=eq.%s&select=*" % urllib.parse.quote(sid)) or [{}])[0]
     token = state.get("page_token")
 
     if a.bootstrap or not token:
@@ -266,7 +377,7 @@ def sync_unidad(drive, supa, fuente, a):
         # Antes esto solo fijaba el token y decia "el contenido vino del crawl
         # completo", que era cierto para Server Media -alguien lo habia
         # indexado a mano antes- y falso para cualquier unidad que se sume
-        # despues. El 22/9 se sumo "Multimedia Drive", donde John venia
+        # despues. El 22/9 se sumo "Multimedia Drive", donde ya se venian
         # cargando albumes: la primera corrida fijo el token y dejo afuera las
         # 27 carpetas que ya estaban. Desde el token solo se ve lo que cambie
         # DESPUES, asi que lo viejo no entraba nunca.
@@ -368,18 +479,20 @@ def sync_unidad(drive, supa, fuente, a):
     #      recorre entera, con sus fotos.
     solo_carpetas = "trashed=false and mimeType='%s'" % FOLDER_MIME
     arriba = {}
-    for anio in listar(drive, q="'%s' in parents and %s" % (root, solo_carpetas)):
+    anios = list(listar(drive, q="'%s' in parents and %s" % (root, solo_carpetas)))
+    for anio in anios:
         arriba[anio["id"]] = (anio, root)
-        for alb in listar(drive, q="'%s' in parents and %s" % (anio["id"], solo_carpetas)):
-            arriba[alb["id"]] = (alb, anio["id"])
+    # los albumes de cada año, varios años a la vez (solo lectura)
+    with ThreadPoolExecutor(HILOS) as pool:
+        hijos = pool.map(lambda an: list(listar(
+            drive, q="'%s' in parents and %s" % (an["id"], solo_carpetas))), anios)
+        for anio, albs in zip(anios, hijos):
+            for alb in albs:
+                arriba[alb["id"]] = (alb, anio["id"])
     candidatas = dict(arriba)
     candidatas.update(changed_folders)
     ids = sorted(candidatas)
-    estan = set()
-    for i in range(0, len(ids), 100):
-        estan |= {r["id"] for r in supa.select(
-            "folders?select=id&id=in.(%s)" % ",".join(ids[i:i + 100])) or []}
-    faltan = {c for c in ids if c not in estan}
+    faltan = faltan_en_folders(supa, ids)
     for cid in sorted(faltan):
         if candidatas[cid][1] in faltan:
             continue          # la trae el recorrido de su madre
@@ -483,6 +596,13 @@ def listar(drive, **params):
             return
 
 
+# UN OR DE "in parents" PIERDE CARPETAS (30/9/2026). Se probo listar los dos
+# primeros niveles de todas las fuentes con "('a' in parents or 'b' in parents
+# ...)": con cinco madres que tienen 33 subcarpetas, Drive devolvio 12, con y
+# sin corpora=allDrives, y sin error. Cada carpeta se lista con su propia
+# consulta, aunque cueste una llamada por carpeta: lo que no se lista no entra.
+
+
 # LOS CAMBIOS DE DRIVE SE PIDEN UNA VEZ POR CORRIDA, NO UNA POR FUENTE (21/9/2026)
 #
 # Cada fuente tipo carpeta le preguntaba a Drive "que cambio desde ayer en todo
@@ -496,23 +616,48 @@ def listar(drive, **params):
 # vuelve a pedir desde ese (pasa poco: las fuentes corren siempre en el mismo
 # orden). Las madres que se van consultando tambien se guardan: son datos de
 # Drive, no dependen de la fuente.
+#
+# Con las fuentes en paralelo (30/9/2026) la lista se pide una vez ANTES de
+# repartirlas, con el corte mas viejo, y un lock cuida que dos hilos no la
+# pidan a la vez. Cada pasada empieza con la lista vacia: la de la pasada
+# anterior ya no tiene lo que llego despues.
 _CAMBIOS = {"corte": None, "archivos": []}
 _MADRES = {}
+_CAMBIOS_LOCK = threading.Lock()
 
 
 def cambios_desde(drive, corte):
     """Carpetas e imagenes creadas o modificadas despues de corte (UTC, sin zona)."""
-    if _CAMBIOS["corte"] is None or corte < _CAMBIOS["corte"]:
-        q = ("(modifiedTime > '%s' or createdTime > '%s') and trashed = false and "
-             "(mimeType = '%s' or mimeType contains 'image/')") % (corte, corte, FOLDER_MIME)
-        _CAMBIOS["archivos"] = list(listar(drive, q=q, corpora="allDrives"))
-        _CAMBIOS["corte"] = corte
-        print("  (lista de cambios de Drive traida desde %s: %d)" % (corte, len(_CAMBIOS["archivos"])))
+    with _CAMBIOS_LOCK:
+        if _CAMBIOS["corte"] is None or corte < _CAMBIOS["corte"]:
+            q = ("(modifiedTime > '%s' or createdTime > '%s') and trashed = false and "
+                 "(mimeType = '%s' or mimeType contains 'image/')") % (corte, corte, FOLDER_MIME)
+            _CAMBIOS["archivos"] = list(listar(drive, q=q, corpora="allDrives"))
+            _CAMBIOS["corte"] = corte
+            _log("  (lista de cambios de Drive traida desde %s: %d)" % (corte, len(_CAMBIOS["archivos"])))
+        archivos = _CAMBIOS["archivos"]
     # Drive devuelve "2026-09-21T17:40:43.882Z": los primeros 19 caracteres se
     # comparan como texto contra el corte, que tiene el mismo formato
-    return [f for f in _CAMBIOS["archivos"]
+    return [f for f in archivos
             if (f.get("modifiedTime") or "")[:19] > corte
             or (f.get("createdTime") or "")[:19] > corte]
+
+
+def corte_de(state, base=None):
+    """El corte de una fuente carpeta: desde cuando mira los cambios, con una
+    hora de margen (los relojes de Drive y el de la corrida no son el mismo).
+    None si no hay de donde sacarlo."""
+    desde = state.get("last_run_at") if state.get("last_status") == "ok" else None
+    if not desde and base and state.get("last_status") != "error":
+        fechas = [r["indexed_at"] for r in base if r.get("indexed_at")]
+        desde = max(fechas) if fechas else None
+    corte = desde or "2000-01-01T00:00:00Z"
+    try:
+        t = _dt.datetime.fromisoformat(str(corte).replace("Z", "+00:00")) - _dt.timedelta(hours=1)
+        corte = t.strftime("%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        pass
+    return desde, corte
 
 
 def recorrer(drive, carpeta_id):
@@ -530,7 +675,17 @@ def recorrer(drive, carpeta_id):
     return carpetas, fotos
 
 
-def sync_carpeta(drive, supa, fuente, a):
+# Las fuentes carpeta se LEEN en paralelo; lo que escriben va de a una, como
+# cuando corrian en fila: dos fuentes pueden compartir carpetas y el trigger
+# folders_hereda_de_madre necesita la madre escrita antes que la hija.
+_ESCRIBIR = threading.Lock()
+# Lecturas a la vez. Medido el 30/9/2026 con --dry-run: 4 hilos 66 s, 8 hilos
+# 60 s, 16 hilos 172 s (sin ningun 403 ni 429: la cola de Drive se estira, p90
+# de 2,6 s a 8,7 s por consulta). Mas no es mejor.
+HILOS = 8
+
+
+def sync_carpeta(drive, supa, fuente, a, state):
     """Una carpeta comun: un My Drive compartido con la cuenta de servicio.
 
     La Changes API por unidad no sirve: la carpeta no es una unidad, y la de
@@ -545,10 +700,12 @@ def sync_carpeta(drive, supa, fuente, a):
     Una fuente sin nada cargado se recorre completa. Una que ya vino del
     indexado inicial (Quilmes, 7/9/2026) arranca desde esa fecha. Lo que se
     borra en Drive no se detecta aca: queda para un recorrido completo.
+
+    Devuelve (si escribio algo, la fila 'ok' de sync_state o None). La fila no
+    se escribe aca: main junta las de todas las fuentes y las sube en un viaje.
     """
     root, sede, sid = fuente["id"], fuente["sede"], estado_id(fuente)
     inicio = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    state = (supa.select("sync_state?id=eq.%s&select=*" % urllib.parse.quote(sid)) or [{}])[0]
     base = supa.rpc_filas("fuente_carpetas", {"p_id": root})
     conocidas = {r["id"] for r in base}
     # LA QUE FALLO SE RECORRE ENTERA, NO DESDE SU PROPIA MARCA.
@@ -571,16 +728,13 @@ def sync_carpeta(drive, supa, fuente, a):
     # escribir una foto y hubo que cortarlo.
     fallo_antes = state.get("last_status") == "error"
     if fallo_antes:
-        print("  la corrida anterior fallo: se recorre el arbol entero")
+        _log("  la corrida anterior fallo: se recorre el arbol entero")
         conocidas = set()
-    desde = state.get("last_run_at") if state.get("last_status") == "ok" else None
-    if not desde and base and not fallo_antes:
-        fechas = [r["indexed_at"] for r in base if r.get("indexed_at")]
-        desde = max(fechas) if fechas else None
+    desde, corte = corte_de(state, base)
 
     carpetas, fotos = {}, {}
     if not conocidas:
-        print("  fuente nueva: se recorre entera")
+        _log("  fuente nueva: se recorre entera")
         meta = drive.get("files/" + root, fields="id,name,mimeType,parents,webViewLink,modifiedTime",
                          supportsAllDrives="true")
         carpetas[root] = (meta, None)
@@ -588,15 +742,7 @@ def sync_carpeta(drive, supa, fuente, a):
         carpetas.update(c2)
         fotos.update(f2)
     else:
-        corte = desde or "2000-01-01T00:00:00Z"
-        # una hora de margen: los relojes de Drive y el de la corrida no son el mismo
-        try:
-            import datetime as _dt
-            t = _dt.datetime.fromisoformat(str(corte).replace("Z", "+00:00")) - _dt.timedelta(hours=1)
-            corte = t.strftime("%Y-%m-%dT%H:%M:%S")
-        except ValueError:
-            pass
-        print("  cambios desde %s" % corte)
+        _log("  cambios desde %s" % corte)
 
         madres = _MADRES
 
@@ -632,7 +778,7 @@ def sync_carpeta(drive, supa, fuente, a):
                 carpetas[f["id"]] = (f, parent)
             else:
                 fotos[f["id"]] = (f, parent)
-        print("  modificados en todo lo que ve la cuenta: %d" % vistos)
+        _log("  modificados en todo lo que ve la cuenta: %d" % vistos)
 
         solo_carpetas = "trashed=false and mimeType='%s'" % FOLDER_MIME
         for anio in listar(drive, q="'%s' in parents and %s" % (root, solo_carpetas)):
@@ -649,14 +795,14 @@ def sync_carpeta(drive, supa, fuente, a):
             fotos.update(f2)
 
     nuevas = [c for c in carpetas if c not in conocidas]
-    print("  carpetas afectadas: %d (%d nuevas)" % (len(carpetas), len(nuevas)))
-    print("  fotos afectadas:    %d" % len(fotos))
+    _log("  carpetas afectadas: %d (%d nuevas)" % (len(carpetas), len(nuevas)))
+    _log("  fotos afectadas:    %d" % len(fotos))
     for c in nuevas[:10]:
-        print("     nueva: %s" % (carpetas[c][0].get("name") or c))
+        _log("     nueva: %s" % (carpetas[c][0].get("name") or c))
 
     if a.dry_run:
-        print("\n(dry-run: no se escribio nada)")
-        return False
+        _log("\n(dry-run: no se escribio nada)")
+        return False, None
 
     # de arriba hacia abajo: la madre tiene que estar antes que la hija
     def profundidad(cid, vistos=None):
@@ -669,12 +815,13 @@ def sync_carpeta(drive, supa, fuente, a):
     orden = sorted(carpetas, key=profundidad)
     frows = [folder_row(carpetas[c][0], carpetas[c][1], (carpetas[c][0].get("name") or "").strip(), campus_de(sede))
              for c in orden]
-    supa.upsert("folders", frows)
     known = conocidas | set(carpetas)
     prows = [photo_row(f, parent) for (f, parent) in fotos.values() if parent in known]
-    supa.upsert("photos", prows)
+    with _ESCRIBIR:
+        supa.upsert("folders", frows)
+        supa.upsert("photos", prows)
 
-    supa.upsert("sync_state", [{
+    fila = {
         "id": sid,
         "page_token": None,
         "last_run_at": inicio,
@@ -685,9 +832,215 @@ def sync_carpeta(drive, supa, fuente, a):
         "updated": len(frows),
         "removed": 0,
         "note": "carpeta: cambios desde %s" % (desde or "el principio (recorrido completo)"),
-    }])
-    print("  escritas: %d carpetas, %d fotos" % (len(frows), len(prows)))
-    return bool(frows or prows)
+    }
+    _log("  escritas: %d carpetas, %d fotos" % (len(frows), len(prows)))
+    return bool(frows or prows), fila
+
+
+# ---------------------------------------------------------------- pasadas
+
+def leer_estados(supa):
+    """sync_state entero, una vez por pasada (antes: un GET por fuente)."""
+    return {r["id"]: r for r in (supa.select("sync_state?select=*") or [])}
+
+
+def anotar_error(supa, a, fuente, e):
+    """El error de una fuente se escribe en el acto: la corrida siguiente la
+    recorre entera (ver sync_carpeta)."""
+    if a.dry_run:
+        return
+    try:
+        supa.upsert("sync_state", [{"id": estado_id(fuente), "last_status": "error",
+                                    "note": str(e)[:300]}])
+    except Exception:
+        pass
+
+
+def _una_carpeta(drive, supa, f, a, state):
+    """Una fuente carpeta dentro de un hilo: lo que imprime queda en su buffer
+    y una falla vuelve como dato, no tira el lote."""
+    _HILO.buf = ["\n== %s (%s, %s)" % (f["nombre"], f["sede"], f["raiz"])]
+    try:
+        cambios, fila = sync_carpeta(drive, supa, f, a, state)
+        return f, cambios, fila, None, _HILO.buf
+    except Exception as e:
+        _HILO.buf.append("  FALLO: %s" % str(e)[:400])
+        return f, False, None, e, _HILO.buf
+    finally:
+        _HILO.buf = None
+
+
+def pasada(drive, supa, fuentes, a):
+    """Todas las fuentes una vez. Devuelve (si algo cambio, nombres que fallaron)."""
+    _CAMBIOS["corte"], _CAMBIOS["archivos"] = None, []
+    _MADRES.clear()
+    estados = leer_estados(supa)
+    cambios, fallas = False, []
+
+    # las unidades primero y en fila: son dos y cada una ya es un solo registro
+    # de cambios
+    for f in [f for f in fuentes if f["raiz"] == "unidad"]:
+        print("\n== %s (%s, %s)" % (f["nombre"], f["sede"], f["raiz"]))
+        try:
+            cambios = sync_unidad(drive, supa, f, a, estados.get(estado_id(f), {})) or cambios
+        except Exception as e:
+            fallas.append(f["nombre"])
+            print("  FALLO: %s" % str(e)[:400])
+            anotar_error(supa, a, f, e)
+
+    carpetas = [f for f in fuentes if f["raiz"] != "unidad"]
+    if carpetas:
+        # la lista de cambios de Drive se trae una vez, con el corte mas viejo
+        # de las fuentes que ya tienen una corrida buena
+        cortes = [corte_de(estados[estado_id(f)])[1] for f in carpetas
+                  if estados.get(estado_id(f), {}).get("last_status") == "ok"
+                  and estados[estado_id(f)].get("last_run_at")]
+        if cortes:
+            try:
+                cambios_desde(drive, min(cortes))
+            except Exception as e:
+                # cada fuente la vuelve a pedir y falla por su cuenta
+                print("  aviso: no se pudo traer la lista de cambios (%s)" % str(e)[:300])
+        filas_ok = []
+        with ThreadPoolExecutor(HILOS) as pool:
+            futuros = [pool.submit(_una_carpeta, drive, supa, f, a,
+                                   estados.get(estado_id(f), {})) for f in carpetas]
+            for fut in futuros:
+                f, cambio, fila, error, buf = fut.result()
+                print("\n".join(buf))
+                cambios = cambio or cambios
+                if error is not None:
+                    fallas.append(f["nombre"])
+                    anotar_error(supa, a, f, error)
+                elif fila:
+                    filas_ok.append(fila)
+        # un solo viaje con todas las filas 'ok' (todas con la misma forma,
+        # como pide PostgREST para un upsert en lote)
+        if filas_ok:
+            supa.upsert("sync_state", filas_ok)
+    return cambios, fallas
+
+
+def _instante(s):
+    """timestamptz de PostgREST ('2026-09-30T13:05:00.12+00:00') a epoch.
+    fromisoformat de Python < 3.11 no acepta fracciones de 2 digitos."""
+    if not s:
+        return None
+    s = str(s).replace("Z", "+00:00")
+    try:
+        return _dt.datetime.fromisoformat(s).timestamp()
+    except ValueError:
+        try:
+            base = _dt.datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
+            return base.replace(tzinfo=_dt.timezone.utc).timestamp()
+        except ValueError:
+            return None
+
+
+def aviso_despues(supa, desde):
+    """Si Drive aviso algo despues del instante desde (epoch). La Edge Function
+    no dispara dos veces en 120 s pero anota cada aviso en ultimo_aviso_at: lo
+    que llego mientras la pasada corria no tiene quien lo vaya a buscar."""
+    if "drive_aviso" in _AVISADO:
+        return False
+    try:
+        filas = supa.select("drive_aviso?select=ultimo_aviso_at&id=eq.1") or []
+    except Exception as e:
+        avisar_una_vez("drive_aviso", "no se pudo leer drive_aviso, sin segunda pasada "
+                       "(falta sql/drive_aviso.sql?): %s" % str(e)[:160])
+        return False
+    t = _instante(filas[0].get("ultimo_aviso_at")) if filas else None
+    return t is not None and t > desde
+
+
+# ---------------------------------------------------------------- canales
+
+DRIVE_AVISO_URL = "https://gfctvsxgulpftiytaxrn.supabase.co/functions/v1/drive-aviso"
+CANAL_DURA_MS = 7 * 86400000 - 3600000        # 7 dias menos 1 hora
+CANAL_RENOVAR_S = 24 * 3600
+
+
+def canales_deseados(fuentes):
+    """(fila de sync_state, driveId o None) por canal: uno por unidad con
+    sincroniza y uno de la cuenta de servicio, que ve lo compartido con ella
+    (las fuentes carpeta). Salen de fuentes_fotos: una unidad nueva suma su
+    canal sola."""
+    return ([(estado_id(f), f["id"]) for f in fuentes if f["raiz"] == "unidad"]
+            + [("cuenta", None)])
+
+
+def renovar_canales(drive, supa, fuentes, a):
+    """Crea o renueva los canales de changes.watch que avisan a drive-aviso.
+
+    Un canal vence a los 7 dias como mucho y no se renueva solo: se crea otro
+    (con otro id), se guarda y se para el viejo. Cualquier error se imprime
+    entero -ahi se ve si Drive pide dominio verificado- y no corta nada: el
+    sync ya hizo su trabajo."""
+    token = env("DRIVE_AVISO_TOKEN")
+    url = env("DRIVE_AVISO_URL") or DRIVE_AVISO_URL
+    try:
+        estados = leer_estados(supa)
+    except Exception as e:
+        print("  push de Drive: no se pudo leer sync_state (%s)" % str(e)[:200])
+        return
+    if estados and not any("canal_id" in r for r in estados.values()):
+        print("  push de Drive apagado: sync_state no tiene las columnas canal_* "
+              "(falta sql/drive_aviso.sql)")
+        return
+    if not a.dry_run and not token:
+        print("  push de Drive apagado: falta DRIVE_AVISO_TOKEN en el ambiente")
+        return
+
+    ahora = time.time()
+    for sid, drive_id in canales_deseados(fuentes):
+        st = estados.get(sid, {})
+        vence = _instante(st.get("canal_vence"))
+        if vence is not None and vence - ahora > CANAL_RENOVAR_S:
+            continue
+        motivo = ("vence %s" % st.get("canal_vence")) if vence is not None else "no tiene"
+        if a.dry_run:
+            print("  canal %s: %s, se crearia uno nuevo%s" % (
+                sid, motivo, " y se pararia el viejo" if st.get("canal_id") else ""))
+            continue
+        try:
+            unidad = {"driveId": drive_id, "supportsAllDrives": "true"} if drive_id else {}
+            tok = drive.get("changes/startPageToken", **unidad)["startPageToken"]
+            params = {"pageToken": tok, "supportsAllDrives": "true",
+                      "includeItemsFromAllDrives": "true"}
+            if drive_id:
+                params["driveId"] = drive_id
+            nuevo_id = str(uuid.uuid4())
+            resp = drive.post("changes/watch", {
+                "id": nuevo_id, "type": "web_hook", "address": url, "token": token,
+                "expiration": int(ahora * 1000) + CANAL_DURA_MS}, **params)
+        except Exception as e:
+            print("  canal %s: FALLO el watch: %s" % (sid, e))
+            continue
+        exp = resp.get("expiration")
+        fila = {"id": sid, "canal_id": nuevo_id, "canal_recurso": resp.get("resourceId"),
+                "canal_vence": (_dt.datetime.fromtimestamp(int(exp) / 1000, _dt.timezone.utc)
+                                .strftime("%Y-%m-%dT%H:%M:%SZ") if exp else None)}
+        try:
+            # upsert: la fila 'cuenta' no existe la primera vez; en las demas
+            # solo toca las tres columnas del canal
+            supa.upsert("sync_state", [fila])
+        except Exception as e:
+            # sin guardarlo nadie lo renueva ni lo para: se para ya
+            print("  canal %s: no se pudo guardar (%s); se para el nuevo" % (sid, e))
+            try:
+                drive.post("channels/stop", {"id": nuevo_id, "resourceId": resp.get("resourceId")},
+                           ok_404=True)
+            except Exception as e2:
+                print("  canal %s: tampoco se pudo parar: %s" % (sid, e2))
+            continue
+        print("  canal %s: creado %s, vence %s" % (sid, nuevo_id, fila["canal_vence"]))
+        if st.get("canal_id") and st.get("canal_recurso"):
+            try:
+                drive.post("channels/stop", {"id": st["canal_id"],
+                                             "resourceId": st["canal_recurso"]}, ok_404=True)
+                print("  canal %s: parado el viejo %s" % (sid, st["canal_id"]))
+            except Exception as e:
+                print("  canal %s: no se pudo parar el viejo %s: %s" % (sid, st["canal_id"], e))
 
 
 def main():
@@ -697,6 +1050,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    inicio_corrida = time.time()
 
     # El .env tiene la clave pero no la URL: es la misma para todo el
     # proyecto y vive como constante en sb.py. Sin esto, correrlo a mano
@@ -716,21 +1070,25 @@ def main():
         # sin la tabla cargada, lo de siempre: solo Server Media
         fuentes = [{"id": ROOT_ID, "nombre": "Server Media", "raiz": "unidad", "sede": "North"}]
 
+    # LA SEGUNDA PASADA. Si Drive aviso algo despues de que empezo la pasada,
+    # ese aviso no dispara otra corrida (esta, que ya esta andando, se la
+    # queda por el concurrency del workflow, o la ventana de 120 s de la Edge
+    # Function lo junto con otro). Se da otra vuelta, hasta 5 por corrida:
+    # un album que se sube durante 10 minutos va entrando por tandas.
     cambios, fallas = False, []
-    for f in fuentes:
-        print("\n== %s (%s, %s)" % (f["nombre"], f["sede"], f["raiz"]))
-        try:
-            hacer = sync_unidad if f["raiz"] == "unidad" else sync_carpeta
-            cambios = hacer(drive, supa, f, a) or cambios
-        except Exception as e:
-            fallas.append(f["nombre"])
-            print("  FALLO: %s" % str(e)[:400])
-            if not a.dry_run:
-                try:
-                    supa.upsert("sync_state", [{"id": estado_id(f), "last_status": "error",
-                                                "note": str(e)[:300]}])
-                except Exception:
-                    pass
+    for n in range(1, 6):
+        comienzo = time.time()
+        if n > 1:
+            print("\n#### pasada %d: Drive aviso algo mientras corria la anterior" % n)
+        c, fl = pasada(drive, supa, fuentes, a)
+        cambios = c or cambios
+        fallas += [x for x in fl if x not in fallas]
+        if a.bootstrap or not aviso_despues(supa, comienzo):
+            break
+        if a.dry_run:
+            print("\n(dry-run: hubo un aviso durante la pasada; se daria otra)")
+            break
+    print("\ntiempo de las pasadas: %.1f s" % (time.time() - inicio_corrida))
 
     # Solo si algo cambio: el rollup recorre todas las carpetas y tarda unos
     # segundos. Una foto nueva cambia el total de todos sus ancestros.
@@ -739,6 +1097,14 @@ def main():
             supa.rpc("refresh_photo_counts", {})
         except Exception as e:
             print("  aviso: no se pudo recalcular los totales (%s)" % e)
+
+    # los canales, una vez por corrida y aunque alguna fuente haya fallado
+    print("\n== push de Drive")
+    try:
+        renovar_canales(drive, supa, fuentes, a)
+    except Exception as e:
+        print("  push de Drive: FALLO %s" % e)
+
     if fallas:
         sys.exit("fallaron: %s" % ", ".join(fallas))
 
