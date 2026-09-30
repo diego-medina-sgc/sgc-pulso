@@ -4,8 +4,8 @@ name: Sync con Drive
 #
 # POR QUE ACA (22/9/2026)
 #
-# Corria en el repo privado, una vez por dia a las 9. John subio albumes nuevos
-# a la unidad "Multimedia Drive" y Diego los fue a buscar a la app el mismo dia:
+# Corria en el repo privado, una vez por dia a las 9. Se subieron albumes nuevos
+# a la unidad "Multimedia Drive" y se los fue a buscar a la app el mismo dia:
 # "hace que se actualicen mas frecuentemente para que se vayan viendo a medida
 # que se cargan". Cada hora en el repo privado son unos 200 minutos por dia
 # contra los 2.000 por mes que regala GitHub: se pagaria. Aca los minutos de un
@@ -76,6 +76,11 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # push de Drive (docs/drive-push.md): con este token el sync crea y
+          # renueva los canales de changes.watch que avisan a la Edge Function
+          # drive-aviso. Sin el, el sync corre igual y no crea canales. La URL
+          # de la funcion no es secreta: va por defecto en sync_drive.py.
+          DRIVE_AVISO_TOKEN: ${{ secrets.DRIVE_AVISO_TOKEN }}
           # por variable y no pegado en el script: el valor no se interpreta
           BOOTSTRAP: ${{ inputs.bootstrap }}
           DRY_RUN: ${{ inputs.dry_run }}
