@@ -232,8 +232,22 @@ PASOS = [
     # corre si el resolver corrio.
     paso("noparecen",      ["grupos_parecidos.py", "--aplicar", "--solo-no-parecen"],
          ["paso:resolver"], quieto=True, sin_esperar_si=("paso:resolver",)),
+    # Tambien sin esperar despues de reagrupar (29/9/2026): persona_grupos
+    # guarda numeros de grupo, y con alguien jugando quedaba hasta ESPERA_MAX_H
+    # apuntando a grupos que ya no existen. La ficha llevaba a grupos ajenos y
+    # la cola de Grupos perdia el orden por fotos_min. No renumera nada.
     paso("gruposconocidos", ["grupos_conocidos.py"],
-         ["paso:grupos", "npz:_referencias"], quieto=True),
+         ["paso:grupos", "npz:_referencias"], quieto=True,
+         sin_esperar_si=DESPUES_DE_GRUPOS),
+    # Las caras sueltas y las de grupos sin nombre, otra vez contra el promedio
+    # de lo que confirmo una persona de cada ficha: deja SUGERENCIAS con
+    # rank=0 (su marca para revertir). Sin esto se comparaban una sola vez, al
+    # procesar su anio. Despues del resolver y de noparecen: reagrupar borra
+    # los nombres automaticos, y "grupo sin nombre" recien vale cuando el
+    # resolver volvio a nombrar. Medido en caras_libres_sugerir.py.
+    paso("libres",         ["caras_libres_sugerir.py", "--aplicar"],
+         ["paso:resolver", "db:identificaciones", "db:rechazos",
+          "npz:_caras_todas", "npz:_referencias"], quieto=True),
     # Un carnet es de una persona: cuando figuran dos y la cara decide, se saca
     # la etiqueta de maquina que pierde. Lo que tiene autoridad no se toca.
     paso("carnets",        ["carnets_dos_personas.py", "--aplicar"],

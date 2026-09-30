@@ -61,6 +61,14 @@ import sb
 VOTOS = 3        # cuantas caras confirmadas tienen que coincidir
 CORTE = 0.80     # cuanto tiene que parecerse a cada una
 
+# Las sugerencias del paso "libres" (rank = 0, caras_libres_sugerir.py) pasan
+# por aca igual que las demas. Medido el 30/9/2026 (_medir_caras_libres.py):
+# de 31.594 que escribiria, este script ve 268 (necesita la huella de
+# (foto, persona) en _caras_evento) y aprobaria 2, las dos sobre la cara del
+# recuadro. Simulado sobre caras confirmadas: 1 mal de 3.442 aprobadas (0,03%)
+# con referencia, y 1 de 18.799 caras de gente sin referencia (0,01%). Debajo
+# del 1,6% que tolera Diego: no se excluyen.
+
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
