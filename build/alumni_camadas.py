@@ -132,7 +132,8 @@ def main():
         print("   %-44s %d" % (k + ":", v))
 
     gente = [g for g in cli.select(
-        "people", select="id,display_name,kind,campus,cohort,first_seen,last_seen,year_code,source")
+        "people", select="id,display_name,kind,campus,cohort,first_seen,last_seen,year_code,"
+                         "source,aliases")
         if g["kind"] != "noise"]
 
     # los años de las fotos que cada persona ya tiene: son un hecho
@@ -153,18 +154,25 @@ def main():
     claves = list(reg)
     _, _, por_token, juegos = indexar(como_padron)
 
-    def buscar(nombre):
-        k = clave(nombre)
-        if k in reg:
-            return reg[k]
-        cand = por_subconjunto(k.split(), por_token, juegos)
-        if len(cand) == 1:
-            return reg[claves[int(cand[0]["id"])]]
-        return None
+    def buscar(g):
+        """(camada, sede), si el cruce fue exacto, y el nombre del archivo.
 
-    cambios, motivos2 = [], Counter()
+        Exacto es el nombre o un alias de la ficha: un alias esta porque
+        alguien dijo "tambien se llama asi" (por ejemplo, al contestar una
+        dudosa de las que deja este mismo script)."""
+        for n in [g["display_name"]] + [x for x in (g.get("aliases") or []) if x]:
+            k = clave(n)
+            if k in reg:
+                return reg[k], True, k
+        cand = por_subconjunto(clave(g["display_name"]).split(), por_token, juegos)
+        if len(cand) == 1:
+            k = claves[int(cand[0]["id"])]
+            return reg[k], False, k
+        return None, False, None
+
+    cambios, motivos2, dudosas = [], Counter(), []
     for g in gente:
-        v = buscar(g["display_name"])
+        v, exacto, k_archivo = buscar(g)
         if not v:
             motivos2["no esta en Total Archive"] += 1
             continue
@@ -180,6 +188,18 @@ def main():
         if g.get("kind") == "staff" and not g.get("cohort"):
             # staff sin camada: si ademas fue alumno, son dos fichas
             motivos2["staff, no se toca"] += 1
+            continue
+        if g.get("kind") == "staff" and not exacto:
+            # EL STAFF NO TIENE CAMADA, SALVO QUE TAMBIEN SEA EXALUMNO (Diego,
+            # 29/9/2026). Y que lo fue lo dice un cruce exacto, no uno por
+            # contencion: el nombre corto de un docente entraba en el largo de
+            # una exalumna distinta y se llevaba su camada -y con ella una
+            # ventana de cursada de dieciseis años en que no estaba-. Eso es
+            # una pregunta, no un dato: va a padron_dudosas.
+            motivos2["staff por contencion, a dudosas"] += 1
+            dudosas.append({"nombre": " ".join(w.capitalize() for w in k_archivo.split()),
+                            "hoja": "planilla_alumni", "parecida_id": g["id"],
+                            "parecida_nombre": g["display_name"], "puntaje": 0.9})
             continue
 
         fotos = anios_foto.get(int(g["id"]), set())
@@ -214,9 +234,20 @@ def main():
                  c["_antes"][1], c["_antes"][2],
                  c.get("first_seen", c["_antes"][1]), c.get("last_seen", c["_antes"][2])))
 
+    print("Staff cruzados solo por contencion (a dudosas, sin escribir camada): %d"
+          % len(dudosas))
+    for d in dudosas:
+        print("   %-6s %-30s ~ %s" % (d["parecida_id"], d["parecida_nombre"][:30], d["nombre"]))
+
     if not a.aplicar:
         print("\nEnsayo: no se escribio nada. Agregar --aplicar.")
         return
+    if dudosas:
+        # solo las que no estan: una dudosa ya contestada no se vuelve a abrir
+        ya = {d["nombre"] for d in cli.select("padron_dudosas", select="nombre")}
+        nuevas = [d for d in dudosas if d["nombre"] not in ya]
+        cli.upsert("padron_dudosas", nuevas, on_conflict="nombre")
+        print("Dudosas nuevas: %d" % len(nuevas))
     for c in cambios:
         cid = c.pop("id")
         c.pop("_antes", None)

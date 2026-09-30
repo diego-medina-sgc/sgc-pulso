@@ -143,7 +143,28 @@ def staff(h):
     return gente
 
 
+def casa_actual(valor):
+    """La house de hoy, sin la sede adelante: "N Stevenson" -> "Stevenson".
+
+    iSAMS la escribe con la letra de la sede pegada (N / Q). En el padron la
+    house es solo el nombre, igual que en las 1.400 de exalumnos. Un valor sin
+    ese prefijo se deja como viene."""
+    v = " ".join((valor or "").split())
+    partes = v.split(" ", 1)
+    if len(partes) == 2 and partes[0] in ("N", "Q"):
+        return partes[1]
+    return v
+
+
 def alumnos(h):
+    """Alumnos actuales: el export de iSAMS.
+
+    HOUSE (29/9/2026). La columna AcademicHouse llega desde el 16/9 y no se
+    leia, asi que ningun alumno actual tenia house: la ficha de un chico de
+    Prep no mostraba la suya aunque el sheet la trajera. Decision de Diego: se
+    carga una sola house, la de hoy, y solo donde la ficha la tiene vacia. El
+    Kinder de Quilmes viene sin house en iSAMS y queda sin house.
+    """
     filas, i = leer(h, "Alumnos actuales")
     gente = {}
     for f in filas:
@@ -154,7 +175,8 @@ def alumnos(h):
         gente[clave(nom + " " + ape)] = {
             "nombre": titulo(nom + " " + ape),
             "sede": {"Q": "Quilmes", "N": "North"}.get(yc[:1]),
-            "year_code": yc or None}
+            "year_code": yc or None,
+            "house": casa_actual(col(f, i, "academichouse")) or None}
     return gente
 
 
@@ -193,7 +215,7 @@ def padron(cli):
     # house va en el select: sin el, "lo que ya esta" se leia como vacio y la
     # regla de completar terminaba pisando (23/9/2026)
     for p in cli.select("people", select="id,display_name,norm_name,kind,campus,"
-                                         "cohort,house,aliases,ex_staff"):
+                                         "cohort,house,aliases,ex_staff,year_code"):
         if p.get("kind") == "noise":
             continue
         gente[p["id"]] = p
@@ -294,7 +316,7 @@ def por_un_alias(nombre, por_alias):
 
 def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True, por_alias=None):
     altas, nombres, sedes, respetadas, ambiguas, completar = [], [], [], [], [], []
-    nuevos_alias = []
+    nuevos_alias, distintas = [], []
     for k, s in gente.items():
         # el staff viene con su propia clave (apellido|nombre): para buscar en
         # el padron se usa el nombre completo
@@ -332,10 +354,25 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True, por_alias=Non
         # sheet trae y el padron no tiene (5.421 fichas sin house). Se llenan
         # solo si estan vacias: una house puesta a mano en la app no se toca,
         # igual que la sede.
+        #
+        # Lo que alguien toco a mano en la app tampoco se completa, aunque lo
+        # haya dejado vacio a proposito (padron_cambios, campo "house" o
+        # "camada").
         faltan = {}
-        for campo, valor in (("house", s.get("house")), ("cohort", s.get("camada"))):
+        for campo, valor, corr_campo in (("house", s.get("house"), "house"),
+                                         ("cohort", s.get("camada"), "camada")):
+            if (p["id"], corr_campo) in corr:
+                continue
+            if campo == "cohort" and p.get("year_code"):
+                # un alumno que hoy cursa no toma la camada de un exalumno con
+                # su mismo nombre: la suya sale de su nivel (camada_ultimo_ano)
+                continue
             if valor and not p.get(campo):
                 faltan[campo] = valor
+            elif valor and p.get(campo) and campo == "house" \
+                    and valor not in p["house"].split(" / "):
+                # la ficha ya tiene otra: no se pisa, se lista
+                distintas.append((p, p["house"], valor))
         if faltan:
             completar.append((p, faltan))
         if campo_sede and s.get("sede") and s["sede"] != p.get("campus"):
@@ -350,15 +387,24 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True, por_alias=Non
     print("   corregidas en la app:  %d  (el sheet no las pisa)" % len(respetadas))
     print("   ambiguas (2 fichas):   %d" % len(ambiguas))
     if completar:
-        print("   fichas a completar:    %d  (house o camada que faltaban)"
-              % len(completar))
+        print("   fichas a completar:    %d  (%s)"
+              % (len(completar), dict(Counter(c for _, f in completar for c in f))))
+    if distintas:
+        # la house de la ficha no es la del sheet: no se pisa, se muestra
+        print("   house distinta a la del sheet (no se toca): %d" % len(distintas))
+        for p, ahora, sheet in distintas:
+            print("      house:  %-6s %-32s %s | sheet: %s"
+                  % (p["id"], p["display_name"][:32], ahora, sheet))
     par = parecidas(altas, por_clave)
     print("   de esas altas, %d se parecen a alguien que YA esta (serian duplicados)"
           % len(par))
     for a, b, r in par[:10]:
         print("      parecida: %-32s ~ %-32s %.2f" % (a[:32], b[:32], r))
-    for s in altas[:8]:
-        print("      alta:   %s" % s["nombre"])
+    # todas, no ocho: un cruce por nombre falla en silencio y esta es la lista
+    # de los que no cruzaron
+    for s in altas:
+        print("      no cruza: %s%s" % (s["nombre"],
+                                        "  (%s)" % s["year_code"] if s.get("year_code") else ""))
     for p, viejo, nuevo in nombres[:8]:
         print("      nombre: %-32s -> %s" % (viejo[:32], nuevo))
     for p, viejo, nuevo in sedes[:8]:
@@ -374,7 +420,7 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True, por_alias=Non
             "alias": nuevos_alias}
 
 
-def aplicar(cli, res, kind, fuente):
+def aplicar(cli, res, kind, fuente, solo_completar=False):
     """Escribe lo medido: nombres, sedes y las altas CLARAS.
 
     Las altas que se parecen a alguien que ya esta no se crean (decision de
@@ -385,6 +431,19 @@ def aplicar(cli, res, kind, fuente):
     manda al sheet, y anotar aca lo que vino del sheet lo devolveria en
     circulos.
     """
+    n_comp = 0
+    for p, faltan in res.get("completar", []):
+        # el filtro "is.null" es el "sin pisar" del lado de la base: si entre
+        # la lectura y la escritura alguien la cargo, esta escritura no la toca
+        cli.update("people", faltan, id="eq.%d" % p["id"],
+                   **{c: "is.null" for c in faltan})
+        n_comp += 1
+    if solo_completar:
+        # --solo-completar: llena lo vacio y nada mas. Para cargar un campo
+        # nuevo del sheet sin arrastrar en la misma escritura nombres, sedes
+        # ni altas que nadie reviso.
+        print("   escrito: %d completadas (solo completar)" % n_comp)
+        return set()
     n_nom = n_sede = n_alta = 0
     for p, viejo, nuevo in res["nombres"]:
         cli.update("people", {"display_name": nuevo}, id="eq.%d" % p["id"])
@@ -392,10 +451,6 @@ def aplicar(cli, res, kind, fuente):
     for p, viejo, nuevo in res["sedes"]:
         cli.update("people", {"campus": nuevo}, id="eq.%d" % p["id"])
         n_sede += 1
-    n_comp = 0
-    for p, faltan in res.get("completar", []):
-        cli.update("people", faltan, id="eq.%d" % p["id"])
-        n_comp += 1
     # la escritura nueva del sheet queda como alias: la proxima lectura la
     # encuentra derecho, sin volver a pasar por el parecido
     for p, nom in res.get("alias", []):
@@ -459,6 +514,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hoja", default="", help="base | alumnos | alumni")
     ap.add_argument("--aplicar", action="store_true")
+    ap.add_argument("--solo-completar", action="store_true",
+                    help="con --aplicar: solo llena campos vacios (house, camada)")
     a = ap.parse_args()
 
     if not os.path.exists(SA_PATH):
@@ -478,12 +535,12 @@ def main():
               % (len(st), dict(Counter(x["estado"] or "sin estado" for x in st.values()))))
         res = comparar("Staff (hoja base)", st, por_clave, corr, por_alias=por_alias)
         if a.aplicar:
-            dudosas += sorted(aplicar(cli, res, "staff", "staff_sheet"))
+            dudosas += sorted(aplicar(cli, res, "staff", "staff_sheet", a.solo_completar))
             # El Status de la hoja dice quien sigue y quien se fue, que hasta
             # hoy se adivinaba por ausencia en la planilla. ex_staff_forzado
             # -lo que Diego marco a mano- le gana igual.
             n_ex = 0
-            for k, x in st.items():
+            for k, x in (st.items() if not a.solo_completar else []):
                 if x["estado"] not in ("Staff actual", "Ex staff"):
                     continue
                 cand = por_clave.get(clave(x["nombre"]), [])
@@ -500,14 +557,17 @@ def main():
     if quiere in ("", "alumnos"):
         res = comparar("Alumnos actuales", alumnos(h), por_clave, corr, por_alias=por_alias)
         if a.aplicar:
-            dudosas += sorted(aplicar(cli, res, "student", "planilla_alumnos"))
+            dudosas += sorted(aplicar(cli, res, "student", "planilla_alumnos", a.solo_completar))
     if quiere in ("", "alumni"):
         res = comparar("Alumni", alumni(h), por_clave, corr, por_alias=por_alias)
         if a.aplicar:
-            dudosas += sorted(aplicar(cli, res, "student", "planilla_alumni"))
+            dudosas += sorted(aplicar(cli, res, "student", "planilla_alumni", a.solo_completar))
 
     if not a.aplicar:
         print("\nEnsayo: no se escribio nada. Agregar --aplicar.")
+        return
+    if a.solo_completar:
+        # no se miraron las dudosas: el archivo de la corrida completa queda
         return
     ruta = os.path.join(HERE, "_padron_unico_dudosas.txt")
     with open(ruta, "w", encoding="utf-8") as fh:
