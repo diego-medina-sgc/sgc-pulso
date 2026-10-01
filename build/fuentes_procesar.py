@@ -286,12 +286,49 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
                  f.get("kind") or "student"))
         sin_padron = []
 
+    # NINGUN NOMBRE EN EL PADRON NO ES UN ERROR (1/10/2026).
+    #
+    # Esto volvia 'error', y no se rompio nada: la carpeta se leyo entera. Las
+    # 30 fuentes de logos, comprobantes y graficos que el 11/9 habian
+    # "resuelto" nombres contra fichas basura, cuando esas fichas pasaron a
+    # ruido quedaron sin ningun nombre en el padron: reprocesadas iban a ser
+    # 25 errores que no hay nada que arreglar. Se mira si hay caras en los
+    # archivos con nombre:
+    #   - ninguna cara: 'listo', no da ninguna cara de referencia.
+    #   - alguna cara: 'a_mano'. Son personas que no estan en las planillas, y
+    #     si se dan de alta lo decide quien manda sobre el padron (da_de_alta),
+    #     no este script.
     if not resuelto:
-        return ("error",
-                "Ninguno de los %d archivos coincide con alguien del padron. "
-                "Los %d nombres que trae no estan en las planillas: "
-                "probablemente no sea una carpeta de gente."
-                % (len(img), len(sin_padron)),
+        if not escribir:
+            return ("pendiente",
+                    "ENSAYO — %d imagenes · ninguna del padron · %d nombres "
+                    "que no estan en las planillas" % (len(img), len(sin_padron)),
+                    None, None)
+        # se mide para saber si hay gente; las huellas no se guardan, porque
+        # no hay de quien son
+        caras_sp, _, _, err = medir_caras(
+            d, [(g, arch, {"id": 0}, camp, c)
+                for g, arch, _nom, camp, c in sin_padron], limite)
+        con_cara = len(caras_sp)
+        if con_cara == 0 and set(err) <= {"no se detecto cara"}:
+            return ("listo",
+                    "Ninguno de los %d archivos coincide con alguien del padron "
+                    "y no hay ninguna cara en los %d que traen nombre: no da "
+                    "ninguna cara de referencia." % (len(img), len(sin_padron)),
+                    0, 0)
+        if con_cara == 0:
+            return ("error",
+                    "Ninguno de los %d archivos coincide con alguien del padron "
+                    "y no se pudieron leer todos (%s)."
+                    % (len(img), ", ".join("%s: %d" % (k, v)
+                                           for k, v in err.most_common())),
+                    0, 0)
+        return ("a_mano",
+                "Ninguno de los %d archivos coincide con alguien del padron, "
+                "pero %d de los %d con nombre tienen cara: si son personas que "
+                "faltan en las planillas, hay que decirlo (marcar la fuente "
+                "como base para que las de de alta)."
+                % (len(img), con_cara, len(sin_padron)),
                 0, 0)
 
     detalle = "%d imagenes · %d del padron · %d sin identificar" % (

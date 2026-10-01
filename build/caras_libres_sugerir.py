@@ -2,7 +2,8 @@
 """Las caras libres, otra vez contra lo que ya se sabe de cada persona.
 
     python caras_libres_sugerir.py                  # ensayo: cuenta y no escribe
-    python caras_libres_sugerir.py --aplicar        # escribe sugerencias (rank 0)
+    python caras_libres_sugerir.py --ensayo         # lo mismo, dicho explicito
+    python caras_libres_sugerir.py --aplicar        # escribe sugerencias (origen 'libres')
     python caras_libres_sugerir.py --revertir       # ensayo del borrado de lo suyo
     python caras_libres_sugerir.py --revertir --aplicar
 
@@ -68,13 +69,25 @@ sirven para esto, salen del anio del carnet. El margen es contra la SEGUNDA
 persona mas parecida: evita proponer cuando hay dos candidatos casi iguales
 (hermanos, fichas duplicadas).
 
-LA MARCA: rank = 0
+LA MARCA: origen = 'libres'
 
-face_suggestions no tiene columna de origen. faces_eventos, faces_sugerir, el
-resolver y recuadros_faltantes escriben rank >= 1, y nadie escribe 0. Asi que
-todo lo de este paso se reconoce por rank = 0, y --revertir borra exactamente
-eso (lo que nadie contesto todavia; lo contestado ya es de quien contesto).
-Pedido a base: una columna de origen propia (CONTRATO.md, Pedidos).
+Desde el 1/10/2026 face_suggestions tiene columna origen (sql/
+face_suggestions_origen.sql): todo lo de este paso se escribe con
+origen = 'libres', y --revertir borra exactamente eso (lo que nadie contesto
+todavia; lo que ya esta en photo_labels o photo_people es de quien contesto).
+Hasta el 30/9 la marca era rank = 0; base paso esas filas a origen 'libres'.
+
+rank ya no marca nada: es solo orden. Se sigue escribiendo 0 (RANK, abajo)
+porque approve_face_suggestions aprueba solo con rank = 1 y score alto: si
+este paso escribiera 1, sus sugerencias entrarian a esa aprobacion sin la
+medicion de caras_si_es.py.
+
+FOTOS QUE YA NO ESTAN
+
+Las huellas (.npz) guardan caras de fotos que despues se borraron o purgaron
+de photos. La clave foranea face_suggestions -> photos rechaza esas filas
+(23503), y el 1/10/2026 tiraba el paso entero. Antes de escribir se leen, en
+lotes, cuales photo_id existen, y las demas se descartan y se cuentan.
 
 QUE RESPETA
 
@@ -128,8 +141,10 @@ MIN_MEZCLA = 4
 # gente sin referencia, 183 caen en fichas de 1 o 2.
 MIN_REFS = 3
 
-# La marca de lo que escribe este paso (ver LA MARCA arriba).
-MARCA = 0
+# La marca de lo que escribe este paso (ver LA MARCA arriba), y el rank que
+# lleva: solo orden, 0 para quedar fuera de approve_face_suggestions (rank = 1).
+ORIGEN = "libres"
+RANK = 0
 
 # Dos recuadros son la misma cara si la esquina difiere menos que esto: es la
 # tolerancia de la base (grupos_resolver, sugerencia_respeta_no_es).
@@ -137,6 +152,9 @@ MISMA_CAJA = 0.005
 
 BLOQUE = 8192
 LOTE = 500
+# ids por pedido al preguntar que fotos existen (id de Drive ~33 caracteres:
+# 150 entran comodos en la URL)
+LOTE_IDS = 150
 FUENTES_CARNET = ("mugshot_filename", "filename", "filename_face")
 
 
@@ -409,7 +427,7 @@ def proponer(c, corte=CORTE, margen=MARGEN, min_refs=MIN_REFS, log=True):
             motivo["la cara ya tiene otra sugerencia"] += 1
             continue
         fila = {"photo_id": f, "person_id": int(p), "score": round(float(b1[k]), 4),
-                "rank": MARCA, "bx": bx, "by": by,
+                "rank": RANK, "origen": ORIGEN, "bx": bx, "by": by,
                 "bw": round(float(cajas[i][2]), 4), "bh": round(float(cajas[i][3]), 4)}
         viejo = mejor.get((f, p))
         if viejo is None or fila["score"] > viejo["score"]:
@@ -422,13 +440,38 @@ def proponer(c, corte=CORTE, margen=MARGEN, min_refs=MIN_REFS, log=True):
     return filas, motivo, dict(refs=refs, malas=malas, libres=len(idx), sueltas=sueltas)
 
 
+def fotos_que_existen(cli, ids):
+    """De estos photo_id, los que estan en photos. Una lectura en lotes, no
+    fila por fila. Si un lote falla, se corta: sin saber que existe no se
+    escribe (el pulso lo ve como error, no se tapa)."""
+    ids = sorted(set(ids))
+    hay = set()
+    for a in range(0, len(ids), LOTE_IDS):
+        trozo = ids[a:a + LOTE_IDS]
+        for r in cli.select("photos", select="id", id="in.(%s)" % ",".join(trozo)):
+            hay.add(r["id"])
+        try:
+            if (a // LOTE_IDS) % 50 == 0:
+                di("  fotos: %d de %d consultadas" % (min(a + LOTE_IDS, len(ids)), len(ids)))
+        except Exception:
+            pass
+    return hay
+
+
+def es_fk_fotos(err):
+    """La fila apunta a una foto que ya no esta (se borro entre la lectura y
+    la escritura): no es una fila rota, es una descartada."""
+    return "23503" in err and "photos" in err
+
+
 def insertar(cli, filas):
     """INSERT que ignora lo que ya existe: nunca pisa una sugerencia ajena.
 
     sb.upsert hace merge, y una sugerencia que aparecio entre la lectura y la
     escritura (otro paso, una respuesta) perderia su recuadro. Una fila rota no
-    tira el lote: se reintenta de a una y se cuentan las que fallan."""
-    ok, rotas = 0, []
+    tira el lote: se reintenta de a una y se cuentan las que fallan. Las que
+    fallan porque la foto ya no esta en photos se cuentan aparte (sin_foto)."""
+    ok, rotas, sin_foto = 0, [], 0
     url = "%s/rest/v1/face_suggestions?on_conflict=photo_id,person_id" % cli.url
 
     def mandar(trozo):
@@ -450,27 +493,31 @@ def insertar(cli, filas):
                     mandar([f])
                     ok += 1
                 except Exception as e2:
-                    rotas.append((f, str(e2)[:200]))
+                    if es_fk_fotos(str(e2)):
+                        sin_foto += 1
+                    else:
+                        rotas.append((f, str(e2)[:200]))
         try:
             if (a // LOTE) % 20 == 0:
                 di("  %d de %d" % (min(a + LOTE, len(filas)), len(filas)))
         except Exception:
             pass
-    return ok, rotas
+    return ok, rotas, sin_foto
 
 
 def revertir(cli, aplicar):
     """Borra lo que puso este paso y nadie contesto. Respaldo antes."""
     filas = cli.select("face_suggestions",
-                       select="photo_id,person_id,score,rank,bx,by,bw,bh",
-                       rank="eq.%d" % MARCA)
+                       select="photo_id,person_id,score,rank,origen,bx,by,bw,bh",
+                       origen="eq.%s" % ORIGEN)
     contestadas = {(r["photo_id"], int(r["person_id"])) for r in
                    cli.select("photo_labels", select="photo_id,person_id")}
     contestadas |= {(r["photo_id"], int(r["person_id"])) for r in
                     cli.select("photo_people", select="photo_id,person_id")}
     borrar = [r for r in filas if (r["photo_id"], int(r["person_id"])) not in contestadas]
-    di("Con la marca rank=%d: %d. Sin contestar (se borrarian): %d"
-       % (MARCA, len(filas), len(borrar)))
+    di("Con origen '%s': %d. Contestadas o ya en la foto (quedan): %d. "
+       "Sin contestar (se borrarian): %d"
+       % (ORIGEN, len(filas), len(filas) - len(borrar), len(borrar)))
     if not aplicar:
         di("Ensayo: no se borro nada. Agregar --aplicar.")
         return 0
@@ -487,7 +534,7 @@ def revertir(cli, aplicar):
     for p, ids in por_persona.items():
         for a in range(0, len(ids), 100):
             try:
-                cli.delete("face_suggestions", person_id="eq.%d" % p, rank="eq.%d" % MARCA,
+                cli.delete("face_suggestions", person_id="eq.%d" % p, origen="eq.%s" % ORIGEN,
                            photo_id="in.(%s)" % ",".join(ids[a:a + 100]))
             except Exception as e:
                 fallos += 1
@@ -500,12 +547,16 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--aplicar", action="store_true")
+    ap.add_argument("--ensayo", action="store_true",
+                    help="no escribe (es lo que hace sin --aplicar)")
     ap.add_argument("--revertir", action="store_true")
     ap.add_argument("--persona", type=int, action="append", default=[],
                     help="en el ensayo, detallar esta ficha (se puede repetir)")
     ap.add_argument("--camada", action="append", default=[],
                     help="en el ensayo, detallar este year_code")
     a = ap.parse_args()
+    if a.ensayo and a.aplicar:
+        sys.exit("--ensayo y --aplicar no van juntos")
     cli = sb.SB()
 
     if a.revertir:
@@ -514,6 +565,16 @@ def main():
     t0 = time.time()
     c = leer(cli)
     filas, motivo, info = proponer(c)
+
+    # las huellas traen fotos que ya no estan en photos: la clave foranea las
+    # rechaza. Se filtran antes de escribir (tambien en el ensayo, para contar)
+    di("Mirando que fotos siguen en photos...")
+    hay = fotos_que_existen(cli, [f["photo_id"] for f in filas])
+    n_antes = len(filas)
+    filas = [f for f in filas if f["photo_id"] in hay]
+    descartadas = n_antes - len(filas)
+    if descartadas:
+        motivo["la foto ya no esta en photos"] += descartadas
 
     di("")
     di("SUGERENCIAS NUEVAS (corte %.2f, margen %.2f): %d  a %d personas"
@@ -543,8 +604,10 @@ def main():
     if not a.aplicar:
         di("Ensayo: no se escribio nada. Agregar --aplicar. (%.0f s)" % (time.time() - t0))
         return
-    ok, rotas = insertar(cli, filas)
-    di("Escritas %d sugerencias con rank=%d; %d filas rotas" % (ok, MARCA, len(rotas)))
+    ok, rotas, sin_foto = insertar(cli, filas)
+    di("Escritas %d sugerencias con origen '%s'; %d descartadas antes por foto que ya "
+       "no esta, %d mas al escribir; %d filas rotas"
+       % (ok, ORIGEN, descartadas, sin_foto, len(rotas)))
     for f, e in rotas[:10]:
         di("   rota %s / %d: %s" % (f["photo_id"], f["person_id"], e))
     # un error no se tapa: si algo no entro, el pulso lo ve como fallo

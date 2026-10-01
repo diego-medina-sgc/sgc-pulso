@@ -241,7 +241,7 @@ PASOS = [
          sin_esperar_si=DESPUES_DE_GRUPOS),
     # Las caras sueltas y las de grupos sin nombre, otra vez contra el promedio
     # de lo que confirmo una persona de cada ficha: deja SUGERENCIAS con
-    # rank=0 (su marca para revertir). Sin esto se comparaban una sola vez, al
+    # origen='libres' (su marca para revertir). Sin esto se comparaban una vez, al
     # procesar su anio. Despues del resolver y de noparecen: reagrupar borra
     # los nombres automaticos, y "grupo sin nombre" recien vale cuando el
     # resolver volvio a nombrar. Medido en caras_libres_sugerir.py.
