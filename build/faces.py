@@ -140,6 +140,64 @@ def npz(nombre):
     return os.path.join(HERE, base + ext)
 
 
+# DE QUE SE PUEDE APRENDER (5/10/2026)
+#
+# Decision de Diego: lo que nombra el sistema no puede ser referencia. Una
+# respuesta equivocada que se vuelve referencia atrae mas caras ajenas, que
+# tambien se nombran solas, y el error se multiplica sin que nadie conteste
+# nada: 28 de 42 reagrupamientos pasaron sin una sola respuesta humana (2/10).
+#
+#   humanas  'game' y 'manual' (los juegos y la ficha) y 'grupo' (un "Si" en
+#            Grupos: lo contesto una persona mirando las caras del grupo)
+#   carnets  el nombre sale del archivo del retrato. Solo cuentan para quien
+#            no tiene NINGUNA cara humana de referencia: 3 de 1.864 personas
+#            tenian carnets a nombre de otro (28/9), y lo humano manda.
+#   fuentes  las que anoto Diego (Valete, anuarios, staff, carpetas de
+#            _referencias_fuente_*): existen para darle cara a quien no tiene
+#            fotos, y valen igual que los carnets, solo para quien no tiene
+#            ninguna cara humana (faces_sugerir.todas_las_referencias).
+#
+# Afuera todo lo de maquina: auto_grupo, face_auto, face, cluster, dedupe,
+# filename_face y cualquier source nuevo que no este en estas dos listas.
+# Medido el 5/10/2026 en build/_medir_referencias_humanas.py: personas con
+# referencia (fotos + fuentes) 4.824 -> 4.782; 44 se quedan sin ninguna (41
+# con identificacion humana en fotos sin cara ubicable). Leave-one-out sobre
+# 40.782 caras humanas, a 0,50: error 21,3% -> 0,62%, captura 78,4% -> 98,2%;
+# casi todo por tomar la persona de la pareja (foto, persona) y no de la foto
+# (con eso solo: 0,55% / 99,1%).
+FUENTES_HUMANAS = ("game", "manual", "grupo")
+FUENTES_CARNET = ("filename", "mugshot_filename")
+
+
+def filtrar_referencias(fotos, personas, vigentes):
+    """Que caras de un .npz de referencias valen hoy, y de quien son.
+
+    fotos, personas: por cara, la foto y la persona con que se archivo.
+    vigentes: {(foto, persona): set de sources} de photo_people HOY, solo de
+              personas vivas.
+
+    Devuelve (indices, persona de cada uno). Vale la pareja (foto, persona)
+    con que se archivo la cara, no "alguien de esa foto": hasta el 5/10/2026
+    cargar_refs() tomaba la persona por FOTO, y en una foto de acto con varias
+    identificadas le daba a la cara de uno el nombre de otro. Si la pareja ya
+    no esta (una fusion, un "no es"), la cara no vale hasta que
+    faces_referencias.py la vuelva a archivar con la persona de hoy.
+    """
+    cand = []
+    for i, (f, p) in enumerate(zip(fotos, personas)):
+        p = int(p)
+        ss = vigentes.get((f, p))
+        if not ss:
+            continue
+        if ss & set(FUENTES_HUMANAS):
+            cand.append((i, p, True))
+        elif ss & set(FUENTES_CARNET):
+            cand.append((i, p, False))
+    con_humana = {p for _, p, h in cand if h}
+    out = [(i, p) for i, p, h in cand if h or p not in con_humana]
+    return [i for i, _ in out], [p for _, p in out]
+
+
 def sesion_arcface():
     global _sesion
     if _sesion is None:

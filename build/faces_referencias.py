@@ -130,7 +130,7 @@ def catalogo(cli):
     """(photo_id, person_id, año) de cada retrato con identidad confirmada."""
     print("Leyendo identificaciones confirmadas…")
     pp = cli.select("photo_people",
-                    select="photo_id,person_id,"
+                    select="photo_id,person_id,source,"
                            "photos(folder_id,source,url_host,url_core,external_realm)")
     fol = cli.select("folders", select="id,year,campus")
     anio = {f["id"]: f.get("year") for f in fol}
@@ -141,13 +141,24 @@ def catalogo(cli):
     # de que ese modulo existiera, y el efecto era que Quilmes nunca podia
     # reciclar sus propias identificaciones como caras de referencia.
     from collections import Counter
+    # SOLO LO QUE CONFIRMO UNA PERSONA (5/10/2026). Lo que nombra el sistema
+    # -auto_grupo, face_auto, cluster, filename_face...- no es referencia: si
+    # esta mal, atrae mas caras ajenas que tambien se nombran solas. Aca se
+    # archivan las humanas y TODOS los carnets; cual carnet vale (solo el de
+    # quien no tiene ninguna cara humana) se decide al guardar, con las caras
+    # ya ubicadas: una identificacion humana en una foto de acto sin recuadro
+    # no da cara, y esa persona tiene que poder quedarse con su carnet.
+    sirve = set(faces.FUENTES_HUMANAS) | set(faces.FUENTES_CARNET)
     todo = []
     for r in pp:
+        if (r.get("source") or "") not in sirve:
+            continue
         ph = r.get("photos") or {}
         if ph.get("source") not in ("drive", "zenfolio"):
             continue
         fid = ph.get("folder_id")
-        todo.append((r["photo_id"], r["person_id"], anio.get(fid), campus.get(fid), ph))
+        todo.append((r["photo_id"], r["person_id"], anio.get(fid), campus.get(fid),
+                     dict(ph, _fuente=r.get("source"))))
 
     # La marca de agua de Zenfolio cae encima de la cara y la arruina como
     # referencia. Medido sobre los 622 retratos que estan en las dos fuentes,
@@ -174,6 +185,8 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--limite", type=int, default=0)
+    ap.add_argument("--ensayo", action="store_true",
+                    help="decir que quedaria, sin bajar fotos ni escribir el .npz")
     ap.add_argument("--rehacer-con-caja", action="store_true",
                     help="recalcular las referencias que salieron de una foto "
                          "de evento: son las que se archivaron tomando la cara "
@@ -239,7 +252,29 @@ def main():
         print("A rehacer por venir de una foto de evento: %d" % (antes - len(ya)))
 
     pend = [f for f in filas if f[0] not in ya]
+    # Un carnet de quien ya tiene una cara humana archivada no se va a guardar
+    # (ver abajo): no se procesa. Sin esto se volveria a intentar en cada
+    # corrida, y los de Zenfolio abririan sesion cada vez.
+    con_humana = {int(f[1]) for f in filas
+                  if f[0] in ya and int(ya[f[0]][1]) == int(f[1])
+                  and f[4].get("_fuente") in faces.FUENTES_HUMANAS}
+    antes = len(pend)
+    pend = [f for f in pend if f[4].get("_fuente") in faces.FUENTES_HUMANAS
+            or int(f[1]) not in con_humana]
+    if antes != len(pend):
+        print("Carnets salteados porque su persona ya tiene caras humanas: %d" % (antes - len(pend)))
     print("A procesar ahora: %d" % len(pend))
+    if a.ensayo:
+        # lo que quedaria guardado sin las nuevas: no baja nada ni escribe
+        fuentes = {}
+        for f in filas:
+            fuentes.setdefault((f[0], int(f[1])), set()).add(f[4].get("_fuente") or "")
+        ids = list(ya)
+        ok, quien = faces.filtrar_referencias(ids, [ya[i][1] for i in ids], fuentes)
+        print("Ensayo: con lo que ya esta en el cache quedarian %d caras de %d personas "
+              "(%d carnets de gente con caras humanas afuera). No se escribio nada."
+              % (len(ok), len(set(quien)), len(ids) - len(ok)))
+        return
 
     # Las huellas de los retratos ya estan calculadas: para esas no hay que
     # bajar nada, ni de Drive ni de Zenfolio. Reconstruir las referencias pasa
@@ -337,6 +372,19 @@ def main():
 
     for pid, vec, persona, anio, camp in resultados:
         ya[pid] = (vec, persona, anio, camp)
+
+    # Los carnets de quien ya tiene caras humanas se van (faces.FUENTES_CARNET).
+    # Lo leen sin pasar por cargar_refs() el agrupamiento, grupos_parecidos,
+    # recuadros, fichas y carnets: la regla tiene que estar en el archivo.
+    fuentes = {}
+    for f in filas:
+        fuentes.setdefault((f[0], int(f[1])), set()).add(f[4].get("_fuente") or "")
+    ids = list(ya)
+    ok, _ = faces.filtrar_referencias(ids, [ya[i][1] for i in ids], fuentes)
+    if len(ok) != len(ids):
+        print("Carnets que no se guardan porque su persona tiene caras humanas: %d"
+              % (len(ids) - len(ok)))
+    ya = {ids[i]: ya[ids[i]] for i in ok}
 
     if not ya:
         sys.exit("No se pudo armar ninguna referencia.")

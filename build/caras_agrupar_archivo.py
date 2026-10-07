@@ -75,6 +75,9 @@ CENTRO = 0.60       # cuánto tiene que acompañar al centro del grupo
 # Con 0,60 la cola del juego baja de 30.463 a 19.807 grupos y se dejan de
 # preguntar 10.106 grupos de 2 o 3 caras.
 UNIR = 0.60         # dos grupos que son la misma persona (0: no unir)
+# De que sources sale el must-link de memoria(): sin 'grupo' (ver la tabla
+# alli, medida el 5/10/2026). Las referencias si lo usan (faces.FUENTES_HUMANAS).
+MEMORIA = ("game", "manual")
 BLOQUE = 512        # caras por vuelta; 512 x 450.000 son ~900 MB de cuenta
 
 
@@ -105,10 +108,25 @@ def memoria(cli, fotos, quienes, confirmado, n, cajas=None):
 
     El cannot-link no tiene ese problema -prohibir de mas cuesta grupos mas
     chicos, no grupos mezclados- asi que toma photo_people_rejected entero.
+
+    LAS RESPUESTAS DE GRUPOS NO VAN ACA (medido el 5/10/2026). 'grupo' es
+    humano y sirve como referencia (faces.FUENTES_HUMANAS), pero como
+    must-link mezcla mas: un "Si" de Grupos se contesta mirando 6 caras de un
+    grupo que puede traer alguna ajena, y aca se une sin mirar el parecido.
+    Mismos pares (corte 0,70, .npz locales), build/_medir_memoria_grupo.py:
+
+                                                 game+manual   +grupo
+      uniones forzadas entre caras < 0,30             51         316
+      grupos mezclados por presencia (< 0,50)        357         383
+      grupos mezclados con 2+ personas                26          23
+      grupos mezclados nuevos / que desaparecen        -       44 / 21
+      caras que cambian de grupo                       -      16.576
+
+    Por eso el must-link sigue saliendo solo de 'game' y 'manual' (MEMORIA).
     """
     humanas = {}
     for r in cli.select("photo_people", select="photo_id,person_id,source"):
-        if r["source"] in ("game", "manual"):
+        if r["source"] in MEMORIA:
             humanas.setdefault(r["photo_id"], set()).add(int(r["person_id"]))
     rechazos = {}
     for r in cli.select("photo_people_rejected", select="photo_id,person_id"):
@@ -149,6 +167,85 @@ def memoria(cli, fotos, quienes, confirmado, n, cajas=None):
         juntar.setdefault(q, []).append(m)
     juntar = {q: v for q, v in juntar.items() if len(v) > 1}
     return de_quien, prohibido, juntar
+
+
+def pares(V, corte, bloque=BLOQUE, mitad=True, avisar=True):
+    """Los pares de caras (i < j) que se parecen al menos `corte`.
+
+    Devuelve (puntaje, i, j) en numpy, en el orden en que se recorren: por i y,
+    dentro de cada i, por j.
+
+    LA MITAD DE LA CUENTA (5/10/2026)
+
+    Hasta aca cada bloque de caras se multiplicaba contra TODAS y despues se
+    tiraba el triangulo de abajo: el par (i, j) ya se habia visto cuando le
+    toco a j. Es la mitad de la cuenta tirada. Ahora cada bloque se multiplica
+    solo contra las caras que vienen despues de su primera fila (V[i0:]), y
+    adentro del bloque se sigue pidiendo j > i para el pedazo de la diagonal.
+
+    Salen los mismos pares y en el mismo orden: las columnas que se dejan de
+    calcular son justamente las que el filtro j > i descartaba, y np.nonzero
+    recorre fila por fila igual que antes. Verificado con los .npz locales el
+    5/10/2026 (build/_medir_pares_mitad.py, corte 0,70, 552.561 caras): en
+    las primeras 481.536 caras (la medicion se corto ahi) los pares salieron
+    identicos en todos los bloques, y la cuenta bajo de 3.461 s a 2.296 s
+    (-34% en lo medido; las caras que faltaban son las mas baratas para la
+    cuenta nueva, asi que el total no deberia quedar peor que eso).
+
+    mitad=False deja la cuenta vieja, solo para poder compararlas.
+    """
+    n = len(V)
+    t0 = time.time()
+    trozos_s, trozos_i, trozos_j = [], [], []
+    cuantos = 0
+    for i0 in range(0, n, bloque):
+        desde = i0 if mitad else 0
+        S = V[i0:i0 + bloque] @ V[desde:].T
+        # el triangulo de arriba y nada mas. Se arma de una para todo el
+        # bloque en vez de fila por fila.
+        filas, cols = np.nonzero(S >= corte)
+        reales = filas + i0
+        cols_reales = cols + desde
+        quedan = cols_reales > reales
+        filas, cols, reales, cols_reales = (filas[quedan], cols[quedan],
+                                            reales[quedan], cols_reales[quedan])
+        if len(filas):
+            trozos_s.append(S[filas, cols].astype(np.float32))
+            trozos_i.append(reales.astype(np.int32))
+            trozos_j.append(cols_reales.astype(np.int32))
+            cuantos += len(filas)
+        del S
+        if avisar and (i0 // bloque) % 20 == 0 and i0:
+            try:
+                hechas = i0 + bloque
+                # con la mitad, el bloque k cuesta (n - i0): lo que falta es el
+                # triangulo de abajo a la derecha, no una recta
+                if mitad:
+                    hecho = n * hechas - hechas * hechas / 2.0
+                    total = n * n / 2.0
+                else:
+                    hecho, total = float(hechas), float(n)
+                falta = (time.time() - t0) / hecho * (total - hecho)
+                print("   %d/%d caras   pares hallados: %d   faltan ~%d min"
+                      % (hechas, n, cuantos, falta / 60), flush=True)
+            except Exception:
+                pass
+    ps = np.concatenate(trozos_s) if trozos_s else np.zeros(0, dtype=np.float32)
+    pi = np.concatenate(trozos_i) if trozos_i else np.zeros(0, dtype=np.int32)
+    pj = np.concatenate(trozos_j) if trozos_j else np.zeros(0, dtype=np.int32)
+    return ps, pi, pj
+
+
+def ordenar_pares(ps):
+    """El orden en que se intentan las fusiones: de mayor a menor parecido.
+
+    ESTABLE (5/10/2026). Con prohibiciones el resultado depende del orden (ver
+    "POR QUE LOS PARES VAN ORDENADOS" en main), y el argsort por defecto de
+    numpy no es estable: dos pares con el mismo puntaje podian llegar en
+    cualquier orden. Con kind="stable" los empates se resuelven por (i, j), y
+    la misma entrada da siempre los mismos grupos.
+    """
+    return np.argsort(-ps, kind="stable")
 
 
 def cargar():
@@ -354,30 +451,7 @@ def main():
     # maquina donde el rehacer de eventos ya esta usando memoria. Quedarse sin
     # RAM a esa hora es otra corrida que aparece muerta a la manana.
     t0 = time.time()
-    trozos_s, trozos_i, trozos_j = [], [], []
-    cuantos = 0
-    for i0 in range(0, n, BLOQUE):
-        S = V[i0:i0 + BLOQUE] @ V.T
-        # el triangulo de arriba y nada mas: el par (i,j) ya se miro cuando
-        # toco j. Se arma de una para todo el bloque en vez de fila por fila.
-        filas, cols = np.nonzero(S >= a.corte)
-        reales = filas + i0
-        quedan = cols > reales
-        filas, cols, reales = filas[quedan], cols[quedan], reales[quedan]
-        if len(filas):
-            trozos_s.append(S[filas, cols].astype(np.float32))
-            trozos_i.append(reales.astype(np.int32))
-            trozos_j.append(cols.astype(np.int32))
-            cuantos += len(filas)
-        if (i0 // BLOQUE) % 20 == 0 and i0:
-            hechas = i0 + BLOQUE
-            falta = (time.time() - t0) / hechas * (n - hechas)
-            print("   %d/%d caras   pares hallados: %d   faltan ~%d min"
-                  % (hechas, n, cuantos, falta / 60))
-    ps = np.concatenate(trozos_s) if trozos_s else np.zeros(0, dtype=np.float32)
-    pi = np.concatenate(trozos_i) if trozos_i else np.zeros(0, dtype=np.int32)
-    pj = np.concatenate(trozos_j) if trozos_j else np.zeros(0, dtype=np.int32)
-    del trozos_s, trozos_i, trozos_j
+    ps, pi, pj = pares(V, a.corte)
     print("Pares por encima de %.2f: %d   (%.0f s, %.0f MB)"
           % (a.corte, len(ps), time.time() - t0,
              (ps.nbytes + pi.nbytes + pj.nbytes) / 1e6))
@@ -385,7 +459,7 @@ def main():
     # argsort sobre el puntaje y despues se recorre por indice. Sin .tolist():
     # convertir 33 millones de enteros a objetos de Python vuelve a costar el
     # gigabyte que se acaba de ahorrar.
-    orden = np.argsort(-ps)
+    orden = ordenar_pares(ps)
     pi, pj = pi[orden], pj[orden]
     del ps, orden
     vetadas = 0

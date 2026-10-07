@@ -146,6 +146,16 @@ def descifrar(carpeta):
 
 
 def cambio(carpeta):
+    """Si hay que volver a cifrar y guardar: compara CONTENIDO, no fecha.
+
+    Un .npz reescrito igual no se vuelve a guardar (serian ~790 MB de cache
+    por nada), asi que su fecha nueva se pierde y la vuelta siguiente lo
+    descifra con la del manifiesto. Hasta el 5/10/2026 eso disparaba otra vez
+    todo lo que lo lee, porque pulso.py firmaba los .npz por tamaño y fecha.
+    El arreglo esta del lado de pulso.py (archivos() / mismo_npz): la firma
+    lleva el sha256 y se compara por contenido, asi que la fecha que restaura
+    descifrar() ya no importa. Aca no hace falta comparar fechas.
+    """
     man = leer_manifiesto(carpeta)
     actuales = archivos_estado()
     if set(man) != set(actuales):

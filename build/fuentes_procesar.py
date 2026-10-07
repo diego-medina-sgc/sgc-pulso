@@ -239,7 +239,7 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     #
     # Por defecto no, y esa es la regla de Diego: "el buscador de fotos con
     # nombre no deberia crear personas, las personas son las que estan". Asi
-    # entraron "Nini Supermercado" y "Persona X".
+    # entraron "Nini Supermercado" y "Junior Choir".
     #
     # Pero el mismo dia paso una carpeta con 60 fotos de ex staff, una por
     # persona y con el nombre en el archivo, y dijo "incorporalas al sistema".

@@ -34,7 +34,9 @@ import numpy as np
 
 import faces
 import sb
-from faces_piloto import cargar_refs
+from collections import Counter
+
+from faces_piloto import cargar_refs, cargar_refs_humanas  # noqa: F401
 from index_drive import Drive, SA_PATH
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -58,9 +60,14 @@ def todas_las_referencias(cli):
     planilla de staff, a los adultos que aparecen en casi todos los actos.
     Se complementan, asi que se comparan todas juntas.
     """
-    vecs, personas, anios, _ = cargar_refs(cli)
+    vecs, personas, anios, _, con_humana = cargar_refs_humanas(cli)
     vivas = {p["id"] for p in cli.select("people", select="id,kind")
              if p.get("kind") != "noise"}
+    # LAS FUENTES, COMO LOS CARNETS (5/10/2026): una cara de Valete, anuario,
+    # staff o de una carpeta anotada vale solo para quien no tiene ninguna cara
+    # confirmada por una persona (ver faces.FUENTES_HUMANAS). Existen para
+    # darle referencia a quien no tiene fotos; con caras humanas, mandan esas.
+    tapadas = Counter()
 
     # Las caras de fuente que alguien resolvio a mano en "Revisar incoherencias".
     #
@@ -88,6 +95,9 @@ def todas_las_referencias(cli):
         # una persona borrada o fusionada dejaria una referencia apuntando a nadie
         keep = [i for i, p in enumerate(pers)
                 if p in vivas and (int(p), base) not in malas]
+        n0 = len(keep)
+        keep = [i for i in keep if int(pers[i]) not in con_humana]
+        tapadas[etiqueta] += n0 - len(keep)
         if not keep:
             return
         vecs = np.concatenate([vecs, z["vecs"][keep].astype(np.float32)])
@@ -116,6 +126,9 @@ def todas_las_referencias(cli):
         if faces.MOTOR == "sface" and re.search(r"_[a-z]+\.npz$", path):
             continue
         sumar(path, "fuente " + os.path.basename(path))
+    if sum(tapadas.values()):
+        print("  (caras de fuente que no se usan porque su persona tiene caras humanas: %d)"
+              % sum(tapadas.values()))
     return vecs, personas, anios
 
 

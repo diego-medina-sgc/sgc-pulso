@@ -125,7 +125,7 @@ def main():
     #
     # El maximo por cara decia "este grupo se parece a alguien del padron", que
     # es lo que ordena la cola del juego. Falta lo otro: DE QUIEN. Diego lo
-    # pidio al ver que Persona Y y Persona Z tenian
+    # pidio al ver que Persona X y Persona Y tenian
     # 4 y 2 fotos mientras sus companeros tenian 30 o 200: sus caras estaban en
     # un grupo que nadie habia nombrado, y no habia forma de ir de la persona a
     # su grupo sin esperar a que la cola lo ofreciera.

@@ -34,34 +34,60 @@ UMBRALES = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75]
 
 
 def cargar_refs(cli):
+    """(huellas, personas, años, fotos) de las caras de referencia."""
+    return cargar_refs_humanas(cli)[:4]
+
+
+def cargar_refs_humanas(cli):
+    """Lo mismo que cargar_refs() y, ademas, el conjunto de personas que
+    tienen al menos una cara humana de referencia: las caras de fuentes
+    (Valete, anuario, staff...) valen solo para las que no estan ahi."""
+    v, p, a, f, h = _cargar(cli)
+    return v, p, a, f, h
+
+
+def _cargar(cli):
     """Huellas del archivo, identidades de la base.
 
     La huella es lo caro de calcular y no cambia nunca: se cachea. A quién
     pertenece cada foto sí cambia — se fusionan duplicados, se corrigen
-    identificaciones erradas — así que eso se relee siempre. Si se confiara
-    en el person_id guardado, después de una fusión el padrón mediría contra
-    personas que ya no existen.
+    identificaciones erradas — así que eso se relee siempre: una cara vale si
+    la pareja (foto, persona) con que se archivó sigue en photo_people con un
+    source que puede ser referencia. Después de una fusión la pareja vieja ya
+    no está y la cara espera a que faces_referencias.py la vuelva a archivar
+    la próxima vez que corre (los retratos salen del cache, sin bajar nada).
     """
     if not os.path.exists(REFS):
         sys.exit("Faltan las referencias. Corré antes:  python faces_referencias.py")
+    # cada z["campo"] descomprime el array entero: una vez cada uno
     z = np.load(REFS, allow_pickle=True)
     fotos = [str(x) for x in z["photo_ids"]]
+    personas = z["personas"].astype(int)
+    vecs, anios = z["vecs"], z["anios"]
 
-    actual = {r["photo_id"]: r["person_id"]
-              for r in cli.select("photo_people", select="photo_id,person_id")}
-    validas = {p["id"] for p in cli.select("people", select="id,kind")
+    # SOLO LO QUE CONFIRMO UNA PERSONA (5/10/2026): ver faces.FUENTES_HUMANAS.
+    # Se filtra aca y no solo al armar el .npz porque el .npz es un cache: una
+    # cara que se archivo cuando su etiqueta era de maquina, o que despues
+    # alguien saco, no puede seguir valiendo hasta la proxima corrida.
+    validas = {int(p["id"]) for p in cli.select("people", select="id,kind")
                if p.get("kind") != "noise"}
-
-    keep = [i for i, f in enumerate(fotos)
-            if actual.get(f) in validas]
+    vigentes = {}
+    for r in cli.select("photo_people", select="photo_id,person_id,source"):
+        p = int(r["person_id"])
+        if p in validas:
+            vigentes.setdefault((r["photo_id"], p), set()).add(r.get("source") or "")
+    keep, quien = faces.filtrar_referencias(fotos, personas, vigentes)
     perdidas = len(fotos) - len(keep)
     if perdidas:
-        print("  descartadas %d referencias (identidad borrada o marcada como ruido)"
-              % perdidas)
-    return (z["vecs"][keep].astype(np.float32),
-            np.array([actual[fotos[i]] for i in keep], dtype=int),
-            z["anios"][keep].astype(int),
-            np.array([fotos[i] for i in keep]))
+        print("  descartadas %d referencias (de maquina, borradas, ruido, o carnets de "
+              "quien ya tiene caras humanas)" % perdidas)
+    con_humana = {p for i, p in zip(keep, quien)
+                  if vigentes[(fotos[i], p)] & set(faces.FUENTES_HUMANAS)}
+    return (vecs[keep].astype(np.float32),
+            np.array(quien, dtype=int),
+            anios[keep].astype(int),
+            np.array([fotos[i] for i in keep]),
+            con_humana)
 
 
 def acierta(vecs, personas):

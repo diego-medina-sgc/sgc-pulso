@@ -54,6 +54,7 @@ retirado el 13/9/2026: estan en su historia de git (git log -p -- build/nocturno
 import argparse
 import datetime as dt
 import glob
+import hashlib
 import json
 import os
 import subprocess
@@ -122,15 +123,67 @@ TOPE_H = 6                # un paso que tarda mas que esto se corta
 LOCK_VIEJO_H = 12
 
 
+# EL REAGRUPAMIENTO, UNA VEZ POR NOCHE (5/10/2026)
+#
+# "grupos" corria cada vez que cambiaba db:identificaciones, y eso cambia con
+# lo que escribe el propio pulso (el resolver nombra grupos, la aprobacion
+# automatica pone caras): se disparaba solo. El 1/10 el pulso estuvo 16 horas
+# ocupado reagrupando una y otra vez; 28 de 42 reagrupamientos (2/10) pasaron
+# sin ninguna respuesta humana en el medio, y 24 horas de respuestas mueven 0
+# caras de grupo: lo que contesta la gente lo leen los pasos de cada hora
+# (parecidos, resolver, gruposconocidos, libres), no hace falta renumerar todo.
+#
+# Asi que "grupos" corre solo si ARRANCA adentro de esta ventana, en hora
+# argentina, o si se lo fuerza a mano (gh workflow run pulso.yml -f
+# paso=grupos). Elegida con lo que contesto la gente: photo_labels,
+# respuestas_grupo y grupos_no_son de las 2 semanas al 5/10/2026 no tienen
+# NINGUNA respuesta entre las 23 y las 5; a las 5 hubo 2 dias, a las 6, 6. En
+# 30 dias (con skips y rechazos) las 2 tuvieron actividad 3 dias, las 3 y las
+# 4 un dia. El paso tarda ~50 min y la cascada que lo sigue ~40: arrancando
+# entre las 2 y las 5 termina antes de que empiece la mañana, y tres horas
+# dejan una docena de intentos (el horario de GitHub se atrasa).
+#
+# Sigue esperando a que nadie juegue. Si alguien juega toda la ventana, queda
+# para la noche siguiente; si pasan 24 horas esperando, salud() lo avisa
+# (paso_esperando). Fuera de la ventana no se anota "esperando".
+VENTANA_GRUPOS = (2, 5)        # hora argentina en que puede arrancar: [2, 5)
+HUSO_AR = -3                   # Argentina no tiene horario de verano
+
+
 def paso(nombre, args, entradas, quieto=True, espera_max_h=ESPERA_MAX_H, cada_h=CADA_H,
-         sin_esperar_si=()):
+         sin_esperar_si=(), ventana=None):
     """espera_max_h=None: espera a que nadie juegue, por mas que tarde.
     cada_h: minimo de horas entre dos corridas buenas (0: sin minimo).
     sin_esperar_si: entradas que, si cambiaron, hacen correr el paso aunque
-    alguien este jugando (ver SIN ESPERAR DESPUES DE REAGRUPAR)."""
+    alguien este jugando (ver SIN ESPERAR DESPUES DE REAGRUPAR).
+    ventana: (desde, hasta) en hora argentina; fuera de eso solo corre forzado."""
     return {"nombre": nombre, "args": args, "entradas": entradas, "quieto": quieto,
             "espera_max_h": espera_max_h, "cada_h": cada_h,
-            "sin_esperar_si": tuple(sin_esperar_si)}
+            "sin_esperar_si": tuple(sin_esperar_si), "ventana": ventana}
+
+
+def en_ventana(p, cuando=None):
+    v = p.get("ventana")
+    if not v:
+        return True
+    h = ((cuando or dt.datetime.now(dt.timezone.utc))
+         + dt.timedelta(hours=HUSO_AR)).hour
+    return v[0] <= h < v[1]
+
+
+# LO QUE CONTESTO UNA PERSONA, NO LO QUE ESCRIBIO EL PULSO (5/10/2026)
+#
+# db:identificaciones cuenta TODO photo_people, tambien lo que escribe el
+# pulso, y los pasos que lo leen se disparaban a si mismos: el resolver nombra,
+# eso cambia identificaciones, la vuelta siguiente vuelven a correr
+# referencias, parecidos, resolver... sin que nadie haya contestado nada.
+# La firma "humanas" (pedida a base en CONTRATO.md, seccion 4) cuenta solo
+# respuestas de personas, grupos_no_son y las fuentes que pueden ser
+# referencia (faces.FUENTES_HUMANAS y FUENTES_CARNET). Mientras no exista,
+# "db:humanas|identificaciones" usa identificaciones: es lo de hoy. El dia que
+# aparezca, esos pasos corren una vez por el cambio de firma y despues solo con
+# respuestas.
+HUMANAS = "db:humanas|identificaciones"
 
 
 # SIN ESPERAR DESPUES DE REAGRUPAR (19/9/2026)
@@ -189,19 +242,24 @@ PASOS = [
     paso("no_es",          ["caras_no_es.py", "--aplicar"],
          ["db:rechazos", "npz:_caras_evento"]),
     paso("si_es",          ["caras_si_es.py", "--aplicar"],
-         ["db:identificaciones", "db:rechazos", "npz:_caras_evento"]),
+         [HUMANAS, "db:rechazos", "npz:_caras_evento"]),
+    # Solo de lo que confirmo una persona, y carnets para quien no tiene nada
+    # humano (faces.filtrar_referencias): lo que escribe el pulso no la mueve.
     paso("referencias",    ["faces_referencias.py"],
-         ["db:identificaciones", "npz:_huellas_retratos"]),
+         [HUMANAS, "db:retratos", "npz:_huellas_retratos"]),
     paso("contarrefs",     ["referencias_contar.py"], ["npz:_referencias"]),
     paso("sugerencias",    ["faces_sugerir.py"],
          ["npz:_referencias*", "npz:_huellas_retratos", "db:rechazos"]),
     paso("agrupamiento",   ["faces_agrupar.py", "--aplicar"],
          ["db:sugerencias", "db:identificaciones", "npz:_huellas_retratos"]),
     paso("identicas",      ["identicas_aprobar.py", "--aplicar"], ["db:sugerencias"]),
-    # Renumera todos los grupos: nunca corre con alguien jugando (ESPERA_MAX_H).
+    # Renumera todos los grupos: nunca corre con alguien jugando (ESPERA_MAX_H),
+    # y solo de noche, una vez (VENTANA_GRUPOS; cada_h=12 para que no repita en
+    # la misma ventana). Un reintento tras un fallo no espera las 12 horas.
     paso("grupos",         ["caras_agrupar_archivo.py", "--aplicar", "--corte", "0.70"],
-         ["db:identificaciones", "db:rechazos", "npz:_caras_todas",
-          "npz:_caras_evento", "npz:_referencias"], quieto=True, espera_max_h=None),
+         [HUMANAS, "db:rechazos", "npz:_caras_todas",
+          "npz:_caras_evento", "npz:_referencias"], quieto=True, espera_max_h=None,
+         cada_h=12, ventana=VENTANA_GRUPOS),
     # Las caras que no quedaron en ningun grupo, compactas, para que el visor
     # les dibuje recuadro y se puedan nombrar (sql/caras_mapa.sql).
     paso("mapa",           ["caras_mapa.py", "--aplicar"],
@@ -219,11 +277,17 @@ PASOS = [
     # con parecido alto y claro (nivel 4, sql/resolver_por_parecido.sql), asi
     # que necesita los pares de ESTE agrupamiento. Con el orden de antes leia
     # los de la vuelta anterior, cuyos numeros de grupo ya no existen.
+    #
+    # DE DIA, CON LO QUE HAYA (5/10/2026). Desde que "grupos" corre de noche,
+    # parecidos, resolver, gruposconocidos y libres siguen corriendo cada hora
+    # sobre los grupos de esa noche, con las respuestas nuevas. "paso:grupos"
+    # es solo una fecha: si el reagrupamiento no corre, no los traba; los
+    # dispara una vez cuando corre (sin_esperar_si).
     paso("parecidos",      ["grupos_parecidos.py", "--aplicar"],
-         ["paso:grupos", "db:identificaciones", "db:rechazos"], quieto=True,
+         ["paso:grupos", HUMANAS, "db:rechazos"], quieto=True,
          sin_esperar_si=DESPUES_DE_GRUPOS),
     paso("resolver",       ["grupos_resolver.py", "--escribir"],
-         ["paso:grupos", "paso:parecidos", "db:identificaciones"], quieto=True,
+         ["paso:grupos", "paso:parecidos", HUMANAS], quieto=True,
          sin_esperar_si=DESPUES_DE_GRUPOS),
     # Lo que el resolver acaba de nombrar, medido contra las caras de esa
     # persona (sql/caras_no_parecen.sql). Sin este paso, despues de reagrupar
@@ -246,7 +310,7 @@ PASOS = [
     # los nombres automaticos, y "grupo sin nombre" recien vale cuando el
     # resolver volvio a nombrar. Medido en caras_libres_sugerir.py.
     paso("libres",         ["caras_libres_sugerir.py", "--aplicar"],
-         ["paso:resolver", "db:identificaciones", "db:rechazos",
+         ["paso:resolver", HUMANAS, "db:rechazos",
           "npz:_caras_todas", "npz:_referencias"], quieto=True),
     # Un carnet es de una persona: cuando figuran dos y la cara decide, se saca
     # la etiqueta de maquina que pierde. Lo que tiene autoridad no se toca.
@@ -312,8 +376,78 @@ def archivos(base):
     out = []
     for ruta in sorted(glob.glob(patron)):
         st = os.stat(ruta)
-        out.append("%s:%d:%d" % (os.path.basename(ruta), st.st_size, int(st.st_mtime)))
+        out.append("%s:%d:%d:%s" % (os.path.basename(ruta), st.st_size, int(st.st_mtime),
+                                    contenido(ruta, st)))
     return out
+
+
+# UN .NPZ REESCRITO IGUAL NO ES UN CAMBIO (5/10/2026)
+#
+# La firma de un .npz era tamaño y fecha. Un paso que reescribe el archivo con
+# el mismo contenido le cambia la fecha, y todo lo que lo lee corria de nuevo.
+# Peor en GitHub: estado.py cambio compara por contenido (sha256), ve el
+# archivo igual y no guarda el estado; la vuelta siguiente descifra el .npz con
+# la fecha VIEJA del manifiesto, que tampoco es la que quedo anotada, y la
+# cascada corre otra vez. Ahora la firma lleva tambien los primeros 16
+# caracteres del sha256, y dos firmas con huella se comparan por huella, no
+# por fecha (mismo_npz). El sha se calcula una vez por archivo y fecha en cada
+# vuelta: ~1 s por cada 500 MB.
+_SHA = {}
+
+
+def contenido(ruta, st):
+    k = (ruta, st.st_size, st.st_mtime_ns)
+    if k not in _SHA:
+        h = hashlib.sha256()
+        with open(ruta, "rb") as fh:
+            for bloque in iter(lambda: fh.read(1 << 20), b""):
+                h.update(bloque)
+        _SHA[k] = h.hexdigest()[:16]
+    return _SHA[k]
+
+
+def mismo_npz(a, b):
+    """Dos listas de firmas de .npz: iguales si son los mismos archivos, con
+    el mismo tamaño y el mismo contenido. Las firmas anotadas antes del
+    5/10/2026 no traen huella (nombre:tamaño:fecha): contra esas se compara
+    la fecha, como antes, asi el cambio de formato no dispara nada."""
+    if not isinstance(a, list) or not isinstance(b, list) or len(a) != len(b):
+        return a == b
+    for x, y in zip(a, b):
+        px, py = str(x).split(":"), str(y).split(":")
+        if px[:2] != py[:2]:
+            return False
+        if len(px) >= 4 and len(py) >= 4:
+            if px[3] != py[3]:
+                return False
+        elif px[2:3] != py[2:3]:
+            return False
+    return True
+
+
+def igual(k, a, b):
+    """Una entrada de la firma, vieja contra nueva."""
+    if k.startswith("npz:"):
+        return mismo_npz(a, b)
+    return a == b
+
+
+def anterior(vieja, k):
+    """El valor anotado de la entrada k. Una entrada "db:a|b" nueva se busca
+    tambien como "db:b": la firma anotada antes del 5/10/2026 decia
+    db:identificaciones, y renombrarla no tiene que hacer correr nada."""
+    vieja = vieja or {}
+    if k in vieja:
+        return vieja[k]
+    if k.startswith("db:") and "|" in k:
+        for c in k[3:].split("|"):
+            if "db:" + c in vieja:
+                return vieja["db:" + c]
+    return None
+
+
+def firma_igual(vieja, nueva):
+    return bool(vieja) and all(igual(k, anterior(vieja, k), nueva[k]) for k in nueva)
 
 
 # Cuando cambio un archivo de Drive. Es la unica entrada que no vive ni en la
@@ -342,7 +476,9 @@ def firma(p, db, estados):
     for e in p["entradas"]:
         tipo, nombre = e.split(":", 1)
         if tipo == "db":
-            f[e] = db.get(nombre)
+            # "db:a|b": la primera clave que pulso_firmas() tenga (ver HUMANAS)
+            claves = nombre.split("|")
+            f[e] = next((db[c] for c in claves if c in db), None)
         elif tipo == "npz":
             f[e] = archivos(nombre)
         elif tipo == "paso":
@@ -424,8 +560,14 @@ def decidir(p, db, estados, forzar):
             return False, "fallo %d veces seguidas; reintenta cada %d h" % (
                 fallos, REINTENTO_LENTO_H), f, None
 
-    if not fallos and st.get("firma") == f:
+    if not fallos and st.get("firma") and firma_igual(st.get("firma"), f):
         return False, "sin cambios", f, None
+
+    # fuera de su ventana un paso no arranca, ni siquiera para reintentar; y
+    # no se anota como esperando (ver VENTANA_GRUPOS)
+    if not en_ventana(p):
+        return False, "tiene cambios; solo arranca entre las %d y las %d (hora argentina)" % \
+            p["ventana"], f, None
 
     ultimo_ok = fecha(st.get("ultimo_ok"))
     if not fallos and p.get("cada_h") and ultimo_ok and \
@@ -435,7 +577,8 @@ def decidir(p, db, estados, forzar):
 
     tarde = ""
     viejo = st.get("firma") or {}
-    urgente = [k for k in p.get("sin_esperar_si", ()) if k in f and viejo.get(k) != f[k]]
+    urgente = [k for k in p.get("sin_esperar_si", ())
+               if k in f and not igual(k, anterior(viejo, k), f[k])]
     if urgente:
         tarde = " (cambio %s: corre aunque alguien juegue)" % ", ".join(urgente)
     elif p["quieto"]:
@@ -451,7 +594,7 @@ def decidir(p, db, estados, forzar):
     if ya_corre(p["args"][0]):
         return False, "%s ya esta corriendo" % p["args"][0], f, None
 
-    cambio = [k for k in f if (st.get("firma") or {}).get(k) != f[k]]
+    cambio = [k for k in f if not igual(k, anterior(st.get("firma"), k), f[k])]
     motivo = ("reintento tras %d fallo%s" % (fallos, "" if fallos == 1 else "s")) if fallos \
         else ("cambio: " + ", ".join(cambio) if st.get("firma") else "primera vez")
     return True, motivo + tarde, f, None
