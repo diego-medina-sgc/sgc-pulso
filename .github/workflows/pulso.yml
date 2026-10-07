@@ -45,7 +45,7 @@ concurrency:
 
 jobs:
   pulso:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # el reagrupamiento tarda casi una hora; GitHub corta a las 6
     timeout-minutes: 350
     env:
