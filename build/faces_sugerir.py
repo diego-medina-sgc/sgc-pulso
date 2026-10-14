@@ -85,25 +85,34 @@ def todas_las_referencias(cli):
     if malas:
         print("  - %d caras de fuente marcadas como equivocadas" % len(malas))
 
+    # Las caras de una ficha fusionada pasan a la que quedo, si se le parecen
+    # (faces.Fusiones, 14/10/2026). Antes se tiraban con el filtro de vivas.
+    fus = faces.Fusiones(cli)
+
     def sumar(path, etiqueta, con_anio=True):
         nonlocal vecs, personas, anios
         if not os.path.exists(path):
             return
-        z = np.load(path, allow_pickle=True)
-        pers = z["personas"].astype(int)
+        with np.load(path, allow_pickle=True) as z:
+            pers0 = z["personas"].astype(int)
+            V = z["vecs"].astype(np.float32)
+            ax0 = z["anios"].astype(int) if con_anio else None
         base = os.path.basename(path)
-        # una persona borrada o fusionada dejaria una referencia apuntando a nadie
+        pers, pasa = fus.pasar(pers0, V, etiqueta)
+        # una persona borrada dejaria una referencia apuntando a nadie; una
+        # cara marcada mala sigue mala con el id viejo o con el nuevo
         keep = [i for i, p in enumerate(pers)
-                if p in vivas and (int(p), base) not in malas]
+                if pasa[i] and p in vivas and (int(p), base) not in malas
+                and (int(pers0[i]), base) not in malas]
         n0 = len(keep)
         keep = [i for i in keep if int(pers[i]) not in con_humana]
         tapadas[etiqueta] += n0 - len(keep)
         if not keep:
             return
-        vecs = np.concatenate([vecs, z["vecs"][keep].astype(np.float32)])
+        vecs = np.concatenate([vecs, V[keep]])
         personas = np.concatenate([personas, pers[keep]])
         # el staff no tiene año: su foto oficial vale para cualquiera
-        ax = z["anios"].astype(int)[keep] if con_anio else np.full(len(keep), -1)
+        ax = ax0[keep] if con_anio else np.full(len(keep), -1)
         anios = np.concatenate([anios, ax])
         print("  + %d caras de %s" % (len(keep), etiqueta))
 

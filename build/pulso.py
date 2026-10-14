@@ -248,11 +248,18 @@ PASOS = [
          [HUMANAS, "db:rechazos", "npz:_caras_evento"]),
     # Solo de lo que confirmo una persona, y carnets para quien no tiene nada
     # humano (faces.filtrar_referencias): lo que escribe el pulso no la mueve.
+    #
+    # FUSIONES (14/10/2026). Una fusion cambia de quien son las referencias
+    # -las de fotos las mueve merge_person, las de fuente las pasa
+    # faces.Fusiones al cargar- pero una ficha sin fotos no mueve ninguna otra
+    # firma, y estos tres pasos no se enteraban. "db:fusiones" la cuenta
+    # pulso_firmas() (pedido a base); mientras no exista vale None, igual
+    # vuelta a vuelta, y no dispara nada.
     paso("referencias",    ["faces_referencias.py"],
-         [HUMANAS, "db:retratos", "npz:_huellas_retratos"]),
-    paso("contarrefs",     ["referencias_contar.py"], ["npz:_referencias"]),
+         [HUMANAS, "db:retratos", "npz:_huellas_retratos", "db:fusiones"]),
+    paso("contarrefs",     ["referencias_contar.py"], ["npz:_referencias", "db:fusiones"]),
     paso("sugerencias",    ["faces_sugerir.py"],
-         ["npz:_referencias*", "npz:_huellas_retratos", "db:rechazos"]),
+         ["npz:_referencias*", "npz:_huellas_retratos", "db:rechazos", "db:fusiones"]),
     paso("agrupamiento",   ["faces_agrupar.py", "--aplicar"],
          ["db:sugerencias", "db:identificaciones", "npz:_huellas_retratos"]),
     paso("identicas",      ["identicas_aprobar.py", "--aplicar"], ["db:sugerencias"]),

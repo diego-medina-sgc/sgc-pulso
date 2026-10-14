@@ -216,6 +216,133 @@ def fotos_vivas(cli, fotos, que):
     return m
 
 
+# LAS CARAS DE FUENTE DE UNA FICHA FUSIONADA (14/10/2026)
+#
+# merge_person() mueve photo_people, photo_labels, face_suggestions y los
+# rechazos de la ficha que se va a la que queda, y apaga la que se va (kind
+# noise). Las caras de fuente -staff, anuarios, Valete, carpetas anotadas
+# (_referencias_fuente_*)- no viven en la base: estan en los .npz con el id de
+# la ficha con que se archivaron. Hasta aca, al cargarlas se tiraba toda cara de
+# una ficha noise, asi que una fusion PERDIA sus referencias de fuente en vez de
+# pasarlas a la que queda (fichas 7616, 7622 y 7618: cada una con su cara de
+# una carpeta de staff, que se perdia al fusionarla).
+#
+# Ahora la cara pasa a la ficha que queda, siguiendo la cadena de fusiones,
+# pero con un control (regla 10: nada entra como referencia sin chequear
+# coherencia): pasa si se parece al menos umbral("sugerir") -0,50 con arcface,
+# 97% de los pares de la misma persona y ningun par de personas distintas en la
+# calibracion- a alguna cara de referencia que la que queda ya tenga, o si la
+# que queda no tiene ninguna. Una fusion equivocada no mete una cara ajena.
+# Medido el 13-14/10/2026 en las tres de arriba: 0,885, 0,968 y 0,963 contra la
+# foto de staff de la ficha que queda; control con 20 staff al azar, maximo
+# 0,176.
+
+
+def fusiones_destino(cli):
+    """{id que se fue: id que quedo}, siguiendo cadenas (a->b, b->c: a->c).
+
+    Si la tabla no se puede leer, devuelve {} y avisa: se carga como antes
+    (las caras de fichas fusionadas quedan afuera), no se corta el paso."""
+    try:
+        filas = cli.select("fusiones", select="se_va_id,queda_id")
+    except Exception as e:
+        print("  (no se pudo leer fusiones: %s; las caras de fichas fusionadas "
+              "quedan afuera)" % str(e)[:120], flush=True)
+        return {}
+    directo = {}
+    for r in filas:
+        if r.get("se_va_id") is not None and r.get("queda_id") is not None \
+                and int(r["se_va_id"]) != int(r["queda_id"]):
+            directo[int(r["se_va_id"])] = int(r["queda_id"])
+    final = {}
+    for va in directo:
+        q, vistos = directo[va], {va}
+        while q in directo and q not in vistos:
+            vistos.add(q)
+            q = directo[q]
+        final[va] = q
+    return final
+
+
+def _rutas_referencias():
+    """Todos los .npz de caras de referencia del motor activo."""
+    import glob
+    import re
+    rutas = [npz(x) for x in ("_referencias.npz", "_referencias_staff.npz",
+                              "_referencias_anuario.npz", "_referencias_anuario_pdf.npz",
+                              "_referencias_valete.npz")]
+    for r in sorted(glob.glob(npz(os.path.join(HERE, "_referencias_fuente_*.npz")))):
+        # con sface el patron no lleva sufijo y tomaria tambien los de arcface
+        # (el mismo criterio que faces_sugerir.todas_las_referencias)
+        if MOTOR == "sface" and re.search(r"_[a-z]+\.npz$", r):
+            continue
+        rutas.append(r)
+    return [r for r in rutas if os.path.exists(r)]
+
+
+class Fusiones:
+    """Pasa las caras de fichas fusionadas a la ficha que quedo (ver arriba).
+
+        fus = faces.Fusiones(cli)
+        personas, pasa = fus.pasar(personas, vecs, "staff")
+        # personas: con el id de la que quedo; pasa[i] False = no se usa
+
+    Las referencias de las fichas que quedan se leen recien la primera vez que
+    aparece una cara fusionada, de todos los .npz de referencias, una vez."""
+
+    def __init__(self, cli, destino=None, refs=None):
+        self.destino = fusiones_destino(cli) if destino is None else dict(destino)
+        self._refs = refs           # {persona: matriz normalizada}; para tests
+        self.pasadas = 0
+        self.frenadas = 0
+
+    def _cargar_refs(self):
+        quedan = set(self.destino.values())
+        de = {}
+        for ruta in _rutas_referencias():
+            with np.load(ruta, allow_pickle=True) as z:
+                pers = z["personas"].astype(int)
+                idx = [i for i, p in enumerate(pers) if int(p) in quedan]
+                if not idx:
+                    continue
+                V = z["vecs"][idx].astype(np.float32)
+            V /= np.maximum(np.linalg.norm(V, axis=1, keepdims=True), 1e-9)
+            for k, i in enumerate(idx):
+                de.setdefault(int(pers[i]), []).append(V[k])
+        self._refs = {q: np.stack(v) for q, v in de.items()}
+
+    def pasar(self, personas, vecs, que=""):
+        """(personas con el id de destino, mascara de las que se usan)."""
+        pers = np.asarray(personas).astype(int).copy()
+        pasa = np.ones(len(pers), dtype=bool)
+        if not self.destino:
+            return pers, pasa
+        idx = [i for i, p in enumerate(pers) if int(p) in self.destino]
+        if not idx:
+            return pers, pasa
+        if self._refs is None:
+            self._cargar_refs()
+        corte = umbral("sugerir")
+        pasadas = frenadas = 0
+        for i in idx:
+            q = self.destino[int(pers[i])]
+            v = np.asarray(vecs[i], dtype=np.float32)
+            v = v / max(float(np.linalg.norm(v)), 1e-9)
+            R = self._refs.get(q)
+            if R is None or not len(R) or float((R @ v).max()) >= corte:
+                pers[i] = q
+                pasadas += 1
+            else:
+                pasa[i] = False
+                frenadas += 1
+        self.pasadas += pasadas
+        self.frenadas += frenadas
+        print("  %s: %d caras de fichas fusionadas pasan a la que quedo, %d no "
+              "(no se parecen a sus referencias, corte %.2f)"
+              % (que or "referencias", pasadas, frenadas, corte), flush=True)
+        return pers, pasa
+
+
 def sesion_arcface():
     global _sesion
     if _sesion is None:
