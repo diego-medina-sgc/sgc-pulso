@@ -151,15 +151,18 @@ HUSO_AR = -3                   # Argentina no tiene horario de verano
 
 
 def paso(nombre, args, entradas, quieto=True, espera_max_h=ESPERA_MAX_H, cada_h=CADA_H,
-         sin_esperar_si=(), ventana=None):
+         sin_esperar_si=(), ventana=None, requiere=()):
     """espera_max_h=None: espera a que nadie juegue, por mas que tarde.
     cada_h: minimo de horas entre dos corridas buenas (0: sin minimo).
     sin_esperar_si: entradas que, si cambiaron, hacen correr el paso aunque
     alguien este jugando (ver SIN ESPERAR DESPUES DE REAGRUPAR).
-    ventana: (desde, hasta) en hora argentina; fuera de eso solo corre forzado."""
+    ventana: (desde, hasta) en hora argentina; fuera de eso solo corre forzado.
+    requiere: pasos que tienen que haber terminado bien alguna vez antes de que
+    este corra (ej. el llenado completo antes del incremental)."""
     return {"nombre": nombre, "args": args, "entradas": entradas, "quieto": quieto,
             "espera_max_h": espera_max_h, "cada_h": cada_h,
-            "sin_esperar_si": tuple(sin_esperar_si), "ventana": ventana}
+            "sin_esperar_si": tuple(sin_esperar_si), "ventana": ventana,
+            "requiere": tuple(requiere)}
 
 
 def en_ventana(p, cuando=None):
@@ -336,6 +339,25 @@ PASOS = [
     # las dos fichas (sql/fusionar_juego.sql).
     paso("fichas",         ["fichas_parecidas.py", "--aplicar"],
          ["db:identificaciones", "npz:_referencias"], quieto=True),
+    # LA FOTO DE PERFIL (13/10/2026, sql/foto_de_perfil.sql). Al final: lee lo
+    # que dejan todos los de arriba (identificaciones, rechazos, recuadros,
+    # caras de grupos y mapa). La regla y la escritura son de la base.
+    #
+    # El completo, una vez por dia (cada_h=24, sin entradas: corre cuando se
+    # cumple el dia). Ve lo que el incremental no ve: carpetas que cambian, el
+    # anio, la cuenta de caras al reagrupar. La primera vez es el llenado.
+    # quieto: reescribe todas las fichas, mejor sin nadie jugando.
+    paso("foto_perfil_todo", ["foto_perfil_refrescar.py", "--aplicar", "--todos"], [],
+         quieto=True, cada_h=24),
+    # El incremental, todas las vueltas (sin entradas): lo que cambio lo sabe
+    # la base (fotos_de_perfil_pendientes, que tambien mira photo_labels y
+    # fusiones, que pulso_firmas no cuenta). Sin nada pendiente cuesta ~1 s,
+    # medido el 13/10/2026. quieto=False: toca solo las fichas que cambiaron y
+    # la ficha que alguien acaba de nombrar tiene que verse con su foto.
+    # requiere: hasta el llenado todas las fichas salen pendientes, y el
+    # incremental haria el completo con alguien jugando.
+    paso("foto_perfil",    ["foto_perfil_refrescar.py", "--aplicar"], [], quieto=False,
+         requiere=("foto_perfil_todo",)),
 ]
 
 
@@ -553,6 +575,10 @@ def decidir(p, db, estados, forzar):
     if forzar:
         return True, "forzado", f, None
 
+    falta = [r for r in p.get("requiere", ()) if not (estados.get(r) or {}).get("ultimo_ok")]
+    if falta:
+        return False, "espera a que %s corra bien una vez" % ", ".join(falta), f, None
+
     fallos = int(st.get("fallos") or 0)
     if fallos >= 3:
         ultimo = fecha(st.get("ultimo_intento"))
@@ -595,8 +621,13 @@ def decidir(p, db, estados, forzar):
         return False, "%s ya esta corriendo" % p["args"][0], f, None
 
     cambio = [k for k in f if not igual(k, anterior(st.get("firma"), k), f[k])]
-    motivo = ("reintento tras %d fallo%s" % (fallos, "" if fallos == 1 else "s")) if fallos \
-        else ("cambio: " + ", ".join(cambio) if st.get("firma") else "primera vez")
+    if fallos:
+        motivo = "reintento tras %d fallo%s" % (fallos, "" if fallos == 1 else "s")
+    elif not p["entradas"] and st.get("ultimo_ok"):
+        # sin entradas: corre siempre (o cada cada_h), no "por primera vez"
+        motivo = "cada %d h" % p["cada_h"] if p.get("cada_h") else "cada vuelta"
+    else:
+        motivo = "cambio: " + ", ".join(cambio) if st.get("firma") else "primera vez"
     return True, motivo + tarde, f, None
 
 
