@@ -164,6 +164,32 @@ def valor_filtro(v):
     return '"%s"' % str(v).replace("\\", "\\\\").replace('"', '\\"')
 
 
+# FOTOS QUE YA NO ESTAN (13/10/2026)
+#
+# sync_drive.py saca de photos lo que se borro o se mando a la papelera en
+# Drive (purge_photos), y la base se lleva en cascada sus filas de
+# photo_people, face_suggestions, face_groups... Pero las huellas (.npz) no se
+# enteran: siguen guardando esas caras, y lo que se deduce de ellas apunta a
+# una foto que no existe. La clave foranea lo rechaza y Postgres tira el lote
+# entero: agrupamiento y no_es fallaron 37 vueltas seguidas desde el 3/10 por
+# una sola foto asi, y grupos (22/9) y libres (1/10) ya habian caido igual.
+#
+# El criterio es el que ya andaba en caras_libres_sugerir.py y en
+# caras_agrupar_archivo.py: preguntar a photos por lotes de ids con in.(...).
+# 150 ids son ~5 KB de URL, probado en las dos.
+LOTE_IDS = 150
+
+
+def es_fk_fotos(err):
+    """El error es de una fila que apunta a una foto que no esta en photos.
+
+    Postgres lo dice con el codigo 23503 y "Key (photo_id)=(...) is not
+    present in table photos". Todas las claves foraneas de photo_id apuntan a
+    photos, y las de person_id dicen "(person_id)": esas no se confunden."""
+    s = str(err)
+    return "23503" in s and "(photo_id)" in s
+
+
 def filtro_siguiente(clave, ultimo):
     """"Dame lo que viene despues de esta fila", en sintaxis de PostgREST.
 
@@ -194,6 +220,47 @@ class SB:
         if not self.key:
             sys.exit("Falta SUPABASE_SERVICE_KEY en build/.env.\n"
                      "Supabase > Project Settings > API Keys > service_role.")
+        # filas que upsert() dejo afuera porque su foto ya no estaba en photos
+        self.sin_foto = 0
+
+    def fotos_que_existen(self, ids, avisar=None):
+        """De estos photo_id, los que estan en photos. Una lectura por lote de
+        LOTE_IDS, no fila por fila.
+
+        Si un lote falla se corta (el error sube): sin saber que existe no se
+        puede decidir que se escribe, y el pulso lo ve como falla, no se tapa.
+        avisar: un texto para informar el avance en corridas largas."""
+        ids = sorted({str(x) for x in ids if x})
+        hay = set()
+        for a in range(0, len(ids), LOTE_IDS):
+            trozo = ids[a:a + LOTE_IDS]
+            for r in self.select("photos", select="id", id="in.(%s)" % ",".join(trozo)):
+                hay.add(r["id"])
+            if avisar:
+                try:
+                    if (a // LOTE_IDS) % 200 == 0 and a:
+                        print("  %s: fotos consultadas %d de %d"
+                              % (avisar, min(a + LOTE_IDS, len(ids)), len(ids)), flush=True)
+                except Exception:
+                    pass
+        return hay
+
+    def solo_fotos_vivas(self, filas, que="filas", campo="photo_id"):
+        """Las filas cuya foto sigue en photos. Cuenta y avisa las otras.
+
+        Para antes de escribir lo que salio de un .npz: no corta, no borra
+        nada, solo no manda lo que la clave foranea iba a rechazar."""
+        if not filas:
+            return filas
+        hay = self.fotos_que_existen([f[campo] for f in filas], avisar=que)
+        quedan = [f for f in filas if f[campo] in hay]
+        fuera = len(filas) - len(quedan)
+        if fuera:
+            print("  %s: %d de %d apuntan a fotos que ya no estan en photos "
+                  "(%d fotos): no se mandan"
+                  % (que, fuera, len(filas),
+                     len({f[campo] for f in filas} - hay)), flush=True)
+        return quedan
 
     def _headers(self, extra=None):
         h = {"apikey": self.key, "Authorization": "Bearer " + self.key,
@@ -438,13 +505,38 @@ class SB:
         pref = "return=minimal"
         if on_conflict:
             pref = "resolution=merge-duplicates," + pref
-        n = 0
-        for i in range(0, len(filas), lote):
-            trozo = filas[i:i + lote]
+        def mandar(trozo):
             req = urllib.request.Request(
                 "%s/rest/v1/%s%s" % (self.url, tabla, q),
                 data=json.dumps(trozo, ensure_ascii=False).encode("utf-8"),
                 method="POST", headers=self._headers({"Prefer": pref}))
             self._pedir(req)
+
+        # UNA FOTO QUE YA NO ESTA NO TIRA EL PASO (13/10/2026, ver LOTE_IDS).
+        # Si el lote choca contra la clave foranea de photo_id, se pregunta
+        # cuales de sus fotos siguen, se sacan las otras, se avisa cuantas y se
+        # manda de nuevo. Una sola vez: si vuelve a fallar, el error sube. No
+        # cuesta nada mientras no pase; los pasos que cargan un .npz grande
+        # ademas filtran antes (faces.fotos_vivas), esto cubre lo que se borro
+        # en el medio y a todos los que escriben photo_id.
+        n = 0
+        for i in range(0, len(filas), lote):
+            trozo = filas[i:i + lote]
+            try:
+                mandar(trozo)
+            except RuntimeError as e:
+                if not es_fk_fotos(e) or "photo_id" not in trozo[0]:
+                    raise
+                hay = self.fotos_que_existen([f.get("photo_id") for f in trozo])
+                vivas = [f for f in trozo if f.get("photo_id") in hay]
+                fuera = len(trozo) - len(vivas)
+                if not fuera:
+                    raise
+                self.sin_foto += fuera
+                print("  (%s: %d filas apuntaban a fotos que ya no estan en photos; "
+                      "no se mandan)" % (tabla, fuera), flush=True)
+                trozo = vivas
+                if trozo:
+                    mandar(trozo)
             n += len(trozo)
         return n

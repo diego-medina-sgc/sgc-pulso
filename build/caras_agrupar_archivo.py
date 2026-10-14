@@ -248,8 +248,15 @@ def ordenar_pares(ps):
     return np.argsort(-ps, kind="stable")
 
 
-def cargar():
+def cargar(vivas=None):
     """Todas las caras medidas, en un solo espacio: el archivo y el padron.
+
+    vivas: un sb.SB. Si viene, se dejan afuera las caras de fotos que ya no
+    estan en photos (faces.fotos_vivas). Es opcional porque cuesta una lectura
+    de photos por cada 150 fotos (~2.000 lecturas con el archivo entero): lo
+    paga el reagrupamiento, que corre una vez por noche y donde una cara de
+    mas puede pegar dos personas. Los pasos de cada hora que leen esto escriben
+    sobre filas que ya existen, o filtran antes de escribir.
 
     POR QUE JUNTAS
 
@@ -345,7 +352,15 @@ def cargar():
     vecs = np.concatenate([p[2] for p in partes])
     quienes = np.concatenate([p[3] for p in partes])
     confirmado = np.concatenate([p[4] for p in partes])
-    return fotos, cajas, vecs, " + ".join(p[5] for p in partes), quienes, confirmado
+    de_donde = " + ".join(p[5] for p in partes)
+    if vivas is not None:
+        m = faces.fotos_vivas(vivas, fotos, "caras del archivo y del padron")
+        if not m.all():
+            fotos = [f for f, k in zip(fotos, m) if k]
+            cajas, vecs = cajas[m], vecs[m]
+            quienes, confirmado = quienes[m], confirmado[m]
+            de_donde += " - %d de fotos que ya no estan" % int((~m).sum())
+    return fotos, cajas, vecs, de_donde, quienes, confirmado
 
 
 def main():
@@ -358,7 +373,8 @@ def main():
                     help="parecido entre centros de grupo para unirlos (0: no unir)")
     a = ap.parse_args()
 
-    fotos, cajas, V, de_donde, quienes, confirmado = cargar()
+    cli = sb.SB()
+    fotos, cajas, V, de_donde, quienes, confirmado = cargar(vivas=cli)
     V /= np.linalg.norm(V, axis=1, keepdims=True)
     n = len(V)
     print("Caras a agrupar: %d   (%s)" % (n, de_donde))
@@ -375,7 +391,6 @@ def main():
     #
     # El recuadro esta en face_suggestions desde que faces_eventos.py lo empezo
     # a guardar, y la clave es la misma que la de estos npz: (foto, persona).
-    cli = sb.SB()
     guardadas = {}
     for r in cli.select("face_suggestions", select="photo_id,person_id,bx,by,bw,bh"):
         if r.get("bw") and r.get("bh"):
@@ -542,18 +557,21 @@ def main():
                     x = pad2[x]
                 return x
 
-            pares = []
+            # pares_g y no "pares": con ese nombre la lista tapaba a la funcion
+            # pares() del modulo en TODO main(), y la llamada de arriba daba
+            # UnboundLocalError (grupos fallo del 7/10 al 13/10/2026).
+            pares_g = []
             for i0 in range(0, len(rs), BLOQUE):
                 S = G[i0:i0 + BLOQUE] @ G.T
                 fi, co = np.nonzero(S >= a.unir)
                 reales = fi + i0
                 quedan = co > reales
                 if quedan.any():
-                    pares.append(np.stack([S[fi[quedan], co[quedan]],
-                                           reales[quedan], co[quedan]]))
+                    pares_g.append(np.stack([S[fi[quedan], co[quedan]],
+                                             reales[quedan], co[quedan]]))
             unidos_g = vetados_g = distintos_g = 0
-            if pares:
-                P = np.concatenate(pares, axis=1)
+            if pares_g:
+                P = np.concatenate(pares_g, axis=1)
                 for k in np.argsort(-P[0]):
                     x, y = r3(int(P[1][k])), r3(int(P[2][k]))
                     if x == y:
@@ -792,17 +810,9 @@ def main():
     # y guarda fotos que despues se borraron (duplicadas, fuera del archivo):
     # el 22/9 una sola de esas corto la escritura con un 409 de clave foranea
     # DESPUES del vaciado, y el juego de Grupos quedo con 9.000 caras de las
-    # que tenia. Se controla antes de vaciar, asi nunca queda a medias.
-    ids = sorted({f["photo_id"] for f in limpias})
-    vivas = set()
-    for k in range(0, len(ids), 150):
-        vivas.update(ph["id"] for ph in cli.select(
-            "photos", select="id", id="in.(%s)" % ",".join(ids[k:k + 150])))
-    borradas = len(ids) - len(vivas)
-    if borradas:
-        limpias = [f for f in limpias if f["photo_id"] in vivas]
-        print("Fotos que ya no estan en la base: %d, sus caras no se mandan"
-              % borradas)
+    # que tenia. Desde el 13/10/2026 esas caras ya no entran (cargar(vivas=))
+    # y lo que se borre en Drive mientras esto corre lo saca sb.upsert, lote
+    # por lote, sin cortar: nunca queda a medias.
 
     print("\nEscribiendo %d caras en %d grupos…"
           % (len(limpias), len({f["grupo"] for f in limpias})))

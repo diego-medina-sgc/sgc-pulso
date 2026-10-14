@@ -20,6 +20,9 @@ import unicodedata
 from datetime import date as _date
 from collections import Counter, defaultdict
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from classify import interhouse_sin_tema, es_ex_alumnos
+
 ROOT_ID = "0ADoh-DIvUMYeUk9PVA"
 
 # ---------------------------------------------------------------- utilidades
@@ -58,7 +61,7 @@ MESES = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6, "jul": 7,
 # Un año suelto en cualquier parte del nombre: "Fotos 2023", "Landings 2024",
 # "Uruguay 2023". Hasta el 21/9/2026 solo se leia al principio, y las
 # carpetas de año de Quilmes ("Fotos 2026") quedaban sin año: 308 albumes y
-# ~12.500 fotos fuera del filtro por año. Diego: dejar sin año lo ambiguo.
+# ~12.500 fotos fuera del filtro por año. Decisión: dejar sin año lo ambiguo.
 # Por eso no cuenta lo que va entre parentesis ("Fotos staff (actualizado
 # 2026)" es la fecha de actualizacion, no la de las fotos), y si hay dos años
 # distintos ("International Awards 2017-2018") no se elige ninguno.
@@ -214,8 +217,10 @@ EVENT_RULES = [
     # North dice "mugshots"; Quilmes dice "individuales" o "fotos alumnos".
     # "grupales" a secas queda afuera: para identificar a una persona hace
     # falta una foto de una sola persona.
+    # "Deporte individual" no es un retrato: es el deporte (13/10/2026).
     ("Retratos",   ("mugshot", "mugshots", "mug shots", "portrait", "portraits",
-                    "retratos", "fotos carnet", "individual", "individuales",
+                    "retratos", "fotos carnet", r"(?<!deporte )individual",
+                    r"(?<!deportes )individuales",
                     "fotos alumnos", "fotos de alumnos")),
     ("Ceremonia",  ("acto", "ceremony", "ceremonia", "graduation", "graduacion",
                     "valete", "prizegiving", "assembly", "founders", "founder's",
@@ -223,13 +228,26 @@ EVENT_RULES = [
     ("Escenario",  ("play", "drama", "concert", "concierto", "music", "musica",
                     "coro", "choir", "songs", "gala", "recital", "artes",
                     "exhibition", "muestra")),
+    # Ex alumnos: la regla vive en classify.es_ex_alumnos (None = usarla), y
+    # va antes que Deporte en los dos lados para que "OG sports day" muestre
+    # lo mismo en event_types[0] y en ai_event_type (13/10/2026).
+    ("Ex alumnos", None),
+    # "interhouse" no está: es una competencia entre houses de cualquier cosa
+    # (arte, ajedrez, música); el deporte lo dice la otra palabra (12/10/2026).
+    # Con ella se fue el Deporte de "Tennis interhouse" o "Diving interhouse":
+    # por eso están acá todos los deportes de SPORTS.
     ("Deporte",    ("rugby", "hockey", "sports", "football", "futbol", "cricket",
                     "athletics", "atletismo", "swimming", "natacion", "cross",
-                    "interhouse", "interhouses", "tournament", "torneo", "match",
+                    "crosscountry", "steeplechase", "diving", "relay",
+                    "tennis", "tenis", "basketball", "basquet",
+                    "volleyball", "voley", "volley", "deporte", "sevens?",
+                    "tournament", "torneo", "match",
                     "vs", "bowling", "yoga", "gym")),
     ("Viaje",      ("camp", "campamento", "trip", "excursion", "salida", "viaje",
                     "cordoba", "tandil", "angostura", "africa", "nz",
-                    "new zealand", "bariloche", "visita", "visit")),
+                    "new zealand", "bariloche", "visita", "visit",
+                    # giras, como en classify.py (13/10/2026)
+                    "tours?", "giras?", r"nz(aus)?\d*")),
     ("Feria",      ("fair", "feria", "expo", "open day", "openday", "science fair",
                     "book week")),
     ("Comunidad",  ("solidario", "solidarios", "solidaria", "community", "comunidad",
@@ -254,9 +272,22 @@ ACTIVITY_RULES = [
     ("Deportes",  ("pe", "gym", "educacion fisica")),
 ]
 
-SPORTS = ("rugby", "hockey", "football", "futbol", "cricket", "athletics",
-          "atletismo", "swimming", "natacion", "cross country", "bowling",
-          "tenis", "tennis", "voley", "volley", "basquet", "basketball")
+# palabra del título -> deporte. UN SOLO VALOR POR DEPORTE (12/10/2026): la
+# base tenía "football" y "futbol", "swimming" y "natacion", "athletics" y
+# "atletismo", "basketball" y "basquet" como deportes distintos. Queda el
+# inglés, que es el que ya tenía la mayoría de las carpetas.
+SPORTS = {
+    "rugby": "rugby", "hockey": "hockey", "cricket": "cricket",
+    "football": "football", "futbol": "football",
+    "athletics": "athletics", "atletismo": "athletics",
+    "swimming": "swimming", "natacion": "swimming",
+    "cross country": "cross country", "crosscountry": "cross country",
+    "steeplechase": "steeplechase", "diving": "diving",
+    "bowling": "bowling",
+    "tennis": "tennis", "tenis": "tennis",
+    "basketball": "basketball", "basquet": "basketball",
+    "volleyball": "volleyball", "voley": "volleyball", "volley": "volleyball",
+}
 
 TRIPS = {"cordoba": "Córdoba", "tandil": "Tandil", "angostura": "Villa La Angostura",
          "africa": "Sudáfrica", "new zealand": "Nueva Zelanda", "nz": "Nueva Zelanda",
@@ -266,9 +297,13 @@ RE_VS = re.compile(r"\bvs\.?\s+([a-z' ]{3,30})")
 
 
 def parse_event(t):
-    types = [name for name, words in EVENT_RULES if has(t, *words)]
+    types = [name for name, words in EVENT_RULES
+             if (es_ex_alumnos(t) if words is None else has(t, *words))]
+    # el interhouse que no dice de qué es una jornada deportiva (classify.py)
+    if "Deporte" not in types and interhouse_sin_tema(t):
+        types.append("Deporte")
     acts = [name for name, words in ACTIVITY_RULES if has(t, *words)]
-    sports = [s for s in SPORTS if has(t, s)]
+    sports = [v for k, v in SPORTS.items() if has(t, k)]
     trips = sorted({label for key, label in TRIPS.items() if has(t, key)})
 
     opponent = None

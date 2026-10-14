@@ -198,6 +198,24 @@ def filtrar_referencias(fotos, personas, vigentes):
     return [i for i, _ in out], [p for _, p in out]
 
 
+def fotos_vivas(cli, fotos, que):
+    """Mascara por cara: True si su foto sigue en photos (13/10/2026).
+
+    Las huellas guardan caras de fotos que despues se borraron en Drive
+    (sync_drive.py las saca de photos). Para los pasos donde una cara de mas
+    cambia el resultado -el agrupamiento las usa de puente entre dos personas,
+    el mapa del visor las muestra- se dejan afuera al cargar, no al escribir.
+    Mismo criterio que sb.SB.fotos_que_existen, que es el que se usa en todos
+    lados. que: el nombre del .npz, para el aviso."""
+    fotos = [str(f) for f in fotos]
+    hay = cli.fotos_que_existen(fotos, avisar=que)
+    m = np.fromiter((f in hay for f in fotos), dtype=bool, count=len(fotos))
+    fuera = int(len(fotos) - m.sum())
+    print("  %s: %d caras de %d fotos que ya no estan en photos, afuera"
+          % (que, fuera, len(set(fotos) - hay)), flush=True)
+    return m
+
+
 def sesion_arcface():
     global _sesion
     if _sesion is None:

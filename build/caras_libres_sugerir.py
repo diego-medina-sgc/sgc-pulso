@@ -152,9 +152,6 @@ MISMA_CAJA = 0.005
 
 BLOQUE = 8192
 LOTE = 500
-# ids por pedido al preguntar que fotos existen (id de Drive ~33 caracteres:
-# 150 entran comodos en la URL)
-LOTE_IDS = 150
 FUENTES_CARNET = ("mugshot_filename", "filename", "filename_face")
 
 
@@ -441,27 +438,16 @@ def proponer(c, corte=CORTE, margen=MARGEN, min_refs=MIN_REFS, log=True):
 
 
 def fotos_que_existen(cli, ids):
-    """De estos photo_id, los que estan en photos. Una lectura en lotes, no
-    fila por fila. Si un lote falla, se corta: sin saber que existe no se
-    escribe (el pulso lo ve como error, no se tapa)."""
-    ids = sorted(set(ids))
-    hay = set()
-    for a in range(0, len(ids), LOTE_IDS):
-        trozo = ids[a:a + LOTE_IDS]
-        for r in cli.select("photos", select="id", id="in.(%s)" % ",".join(trozo)):
-            hay.add(r["id"])
-        try:
-            if (a // LOTE_IDS) % 50 == 0:
-                di("  fotos: %d de %d consultadas" % (min(a + LOTE_IDS, len(ids)), len(ids)))
-        except Exception:
-            pass
-    return hay
+    """De estos photo_id, los que estan en photos. Desde el 13/10/2026 vive en
+    sb.SB.fotos_que_existen, el mismo criterio para todos los pasos. Si un
+    lote falla, se corta: sin saber que existe no se escribe."""
+    return cli.fotos_que_existen(ids, avisar="libres")
 
 
 def es_fk_fotos(err):
     """La fila apunta a una foto que ya no esta (se borro entre la lectura y
-    la escritura): no es una fila rota, es una descartada."""
-    return "23503" in err and "photos" in err
+    la escritura): no es una fila rota, es una descartada (sb.es_fk_fotos)."""
+    return sb.es_fk_fotos(err)
 
 
 def insertar(cli, filas):

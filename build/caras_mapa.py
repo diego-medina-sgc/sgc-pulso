@@ -60,6 +60,12 @@ def main():
         sueltas += 1
 
     filas = [{"photo_id": f, "cajas": c} for f, c in por_foto.items()]
+    # caras_mapa no tiene clave foranea a photos, asi que nada frena las caras
+    # de fotos borradas en Drive: el 13/10/2026 habia 2.307 filas sin foto. Se
+    # dejan afuera aca, tambien en el ensayo para contarlas.
+    filas = cli.solo_fotos_vivas(filas, "caras_mapa")
+    por_foto = {f["photo_id"]: f["cajas"] for f in filas}
+    sueltas = sum(len(c) // 4 for c in por_foto.values())
     # fila: ~24 de cabecera + id de 33 + arreglo (24 + 4 por numero); indice ~45 por fila
     bytes_tabla = sum(24 + 34 + 24 + 4 * len(c) for c in por_foto.values())
     mb = (bytes_tabla + 45 * len(filas)) / 1048576

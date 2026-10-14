@@ -62,13 +62,21 @@ def main():
 
     if not os.path.exists(HUELLAS):
         sys.exit("Faltan las huellas. Corré antes:  python faces_huellas.py")
-    z = np.load(HUELLAS, allow_pickle=True)
-    ids = [str(x) for x in z["photo_ids"]]
-    vecs = z["vecs"].astype(np.float32)
-    carpetas = [str(x) for x in z["carpetas"]]
+    with np.load(HUELLAS, allow_pickle=True) as z:
+        ids = [str(x) for x in z["photo_ids"]]
+        vecs = z["vecs"].astype(np.float32)
+        carpetas = [str(x) for x in z["carpetas"]]
     print("Huellas cargadas: %d" % len(ids))
 
     cli = sb.SB()
+    # Los retratos borrados en Drive siguen en las huellas: afuera antes de
+    # unir, que una foto que no existe no sirva de puente entre dos fichas ni
+    # se escriba (la clave foranea tiraba el paso entero desde el 3/10/2026).
+    m = faces.fotos_vivas(cli, ids, "retratos")
+    if not m.all():
+        ids = [x for x, k in zip(ids, m) if k]
+        vecs = vecs[m]
+        carpetas = [x for x, k in zip(carpetas, m) if k]
     dueno = {r["photo_id"]: r["person_id"]
              for r in cli.select("photo_people", select="photo_id,person_id")}
     vivas = {p["id"] for p in cli.select("people", select="id,kind")
@@ -202,6 +210,9 @@ def main():
     m = cli.upsert("photo_clusters", cl, on_conflict="photo_id")
     print("Grupos guardados: %d fotos en %d grupos  (impuros: %d)"
           % (m, len(grupos), impuros))
+    if cli.sin_foto:
+        print("Filas que no se mandaron porque su foto se borro mientras corria: %d"
+              % cli.sin_foto)
 
 
 if __name__ == "__main__":

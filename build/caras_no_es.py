@@ -110,6 +110,12 @@ def main():
             nuevos.append({"photo_id": fotos[j], "person_id": p})
             por_persona[p] += 1
 
+    # Las huellas guardan caras de fotos que despues se borraron en Drive: la
+    # clave foranea las rechaza y tiraba el paso entero (37 vueltas desde el
+    # 3/10/2026). Se sacan antes de escribir, tambien en el ensayo para contar.
+    nuevos = cli.solo_fotos_vivas(nuevos, "rechazos deducidos")
+    por_persona = Counter(f["person_id"] for f in nuevos)
+
     print("\nPreguntas que se dejan de hacer: %d   sobre %d fichas"
           % (len(nuevos), len(por_persona)))
     if por_persona:

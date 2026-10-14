@@ -622,8 +622,10 @@ def correr(cli, p, f, motivo, estados):
     # nocturno.ps1, retirado el 13/9/2026).
     motor_cambio = False
     if nombre == "sugerencias":
-        anterior = open(MARCA_MOTOR).read().strip() if os.path.exists(MARCA_MOTOR) else ""
-        if anterior != MOTOR:
+        # motor_previo y no "anterior": ese nombre local tapaba a la funcion
+        # anterior() en todo correr() (la misma trampa que tiro "grupos" el 7/10)
+        motor_previo = open(MARCA_MOTOR).read().strip() if os.path.exists(MARCA_MOTOR) else ""
+        if motor_previo != MOTOR:
             args.append("--rehacer")
             motor_cambio = True
 
