@@ -117,6 +117,7 @@ if os.environ.get("FACES_MOTOR", "").lower() != "arcface":
 
 import numpy as np  # noqa: E402
 
+import faces  # noqa: E402
 import sb  # noqa: E402
 from caras_agrupar_archivo import cargar  # noqa: E402
 from grupos_parecidos import NO_SE_PARECE, normal, verdad_humana  # noqa: E402
@@ -217,6 +218,8 @@ def leer(cli):
         presentes[r["photo_id"]].add(int(r["person_id"]))
         if r.get("source") == "grupo":
             por_grupo.add((r["photo_id"], int(r["person_id"])))
+    # una cara en disputa abierta no es referencia (faces.disputas_abiertas)
+    por_grupo = faces.sin_disputas(por_grupo, faces.disputas_abiertas(cli), "grupo")
 
     di("Leyendo sugerencias, rechazos y 'no es'…")
     sug = cli.select("face_suggestions", select="photo_id,person_id,bx,by,bw,rank")

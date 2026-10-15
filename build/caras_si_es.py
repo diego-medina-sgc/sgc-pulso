@@ -100,8 +100,12 @@ def main():
     pp = cli.select("photo_people", select="photo_id,person_id,source")
     # solo lo que miró una persona: ver arriba
     confirmadas = defaultdict(list)
+    # una cara en disputa abierta no vota (faces.disputas_abiertas)
+    disputadas = faces.disputas_abiertas(cli)
     for r in pp:
         if r.get("source") != "game":
+            continue
+        if (r["photo_id"], int(r["person_id"])) in disputadas:
             continue
         i = fila.get((r["photo_id"], int(r["person_id"])))
         if i is not None:

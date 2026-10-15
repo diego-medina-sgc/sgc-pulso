@@ -169,7 +169,50 @@ FUENTES_HUMANAS = ("game", "manual", "grupo")
 FUENTES_CARNET = ("filename", "mugshot_filename")
 
 
-def filtrar_referencias(fotos, personas, vigentes):
+# UNA CARA EN DISPUTA NO ES REFERENCIA (15/10/2026)
+#
+# caras_disputadas guarda las parejas (foto, persona) donde una respuesta humana
+# choca con otra evidencia y alguien tiene que mirarla (el "si" de un carnet
+# que se parece a carnets ajenos y no a las demas caras de la ficha). El "si"
+# no se borra -el juez es quien carga- pero mientras la disputa este abierta
+# (resuelta_at nula) esa cara no puede ser referencia ni verdad humana: si
+# estaba mal, atrae caras ajenas y el error se multiplica (regla 10).
+#
+# La regla vive aca: disputas_abiertas() las lee una vez y cada lugar que arma
+# "lo que confirmo una persona" las saca con sin_disputas() o pasandolas a
+# filtrar_referencias(). Si la tabla no se puede leer se avisa y se sigue
+# como antes: no se corta un paso por esto.
+
+
+def disputas_abiertas(cli):
+    """{(photo_id, person_id)} de caras_disputadas con resuelta_at nula."""
+    try:
+        filas = cli.select("caras_disputadas", select="photo_id,person_id",
+                           resuelta_at="is.null")
+    except Exception as e:
+        print("  (no se pudo leer caras_disputadas: %s; las disputas no se "
+              "descuentan)" % str(e)[:120], flush=True)
+        return set()
+    return {(r["photo_id"], int(r["person_id"])) for r in filas
+            if r.get("photo_id") and r.get("person_id") is not None}
+
+
+def sin_disputas(pares, disputadas, que=""):
+    """Las parejas (foto, persona) que no estan en disputa. Avisa cuantas saca."""
+    if not disputadas:
+        return pares
+    fuera = [k for k in pares if (k[0], int(k[1])) in disputadas]
+    if not fuera:
+        return pares
+    if que:
+        print("  %s: %d caras en disputa abierta no cuentan como confirmadas"
+              % (que, len(fuera)), flush=True)
+    tipo = type(pares)
+    quedan = [k for k in pares if (k[0], int(k[1])) not in disputadas]
+    return tipo(quedan) if tipo in (set, frozenset) else quedan
+
+
+def filtrar_referencias(fotos, personas, vigentes, disputadas=frozenset()):
     """Que caras de un .npz de referencias valen hoy, y de quien son.
 
     fotos, personas: por cara, la foto y la persona con que se archivo.
@@ -186,6 +229,9 @@ def filtrar_referencias(fotos, personas, vigentes):
     cand = []
     for i, (f, p) in enumerate(zip(fotos, personas)):
         p = int(p)
+        # disputadas: (foto, persona) en disputa abierta (disputas_abiertas)
+        if (f, p) in disputadas:
+            continue
         ss = vigentes.get((f, p))
         if not ss:
             continue

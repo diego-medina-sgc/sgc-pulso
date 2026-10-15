@@ -76,7 +76,9 @@ def _cargar(cli):
         p = int(r["person_id"])
         if p in validas:
             vigentes.setdefault((r["photo_id"], p), set()).add(r.get("source") or "")
-    keep, quien = faces.filtrar_referencias(fotos, personas, vigentes)
+    # una cara en disputa abierta no es referencia (faces.disputas_abiertas)
+    disputadas = faces.disputas_abiertas(cli)
+    keep, quien = faces.filtrar_referencias(fotos, personas, vigentes, disputadas)
     perdidas = len(fotos) - len(keep)
     if perdidas:
         print("  descartadas %d referencias (de maquina, borradas, ruido, o carnets de "

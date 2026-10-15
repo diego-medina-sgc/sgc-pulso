@@ -125,8 +125,11 @@ def memoria(cli, fotos, quienes, confirmado, n, cajas=None):
     Por eso el must-link sigue saliendo solo de 'game' y 'manual' (MEMORIA).
     """
     humanas = {}
+    # una cara en disputa abierta no obliga a nadie (faces.disputas_abiertas):
+    # el must-link une sin mirar el parecido, y es justo lo que la multiplica
+    disputadas = faces.disputas_abiertas(cli)
     for r in cli.select("photo_people", select="photo_id,person_id,source"):
-        if r["source"] in MEMORIA:
+        if r["source"] in MEMORIA and (r["photo_id"], int(r["person_id"])) not in disputadas:
             humanas.setdefault(r["photo_id"], set()).add(int(r["person_id"]))
     rechazos = {}
     for r in cli.select("photo_people_rejected", select="photo_id,person_id"):

@@ -195,6 +195,13 @@ def main():
 
     cli = sb.SB()
     filas = catalogo(cli)
+    # Una cara en disputa abierta no se archiva como referencia ni cuenta como
+    # "caras humanas" de su ficha (faces.disputas_abiertas, 15/10/2026)
+    disputadas = faces.disputas_abiertas(cli)
+    if disputadas:
+        antes = len(filas)
+        filas = [f for f in filas if (f[0], int(f[1])) not in disputadas]
+        print("Caras en disputa abierta que no son referencia: %d" % (antes - len(filas)))
     if a.limite:
         filas = filas[:a.limite]
 
@@ -270,7 +277,8 @@ def main():
         for f in filas:
             fuentes.setdefault((f[0], int(f[1])), set()).add(f[4].get("_fuente") or "")
         ids = list(ya)
-        ok, quien = faces.filtrar_referencias(ids, [ya[i][1] for i in ids], fuentes)
+        ok, quien = faces.filtrar_referencias(ids, [ya[i][1] for i in ids], fuentes,
+                                              disputadas)
         print("Ensayo: con lo que ya esta en el cache quedarian %d caras de %d personas "
               "(%d carnets de gente con caras humanas afuera). No se escribio nada."
               % (len(ok), len(set(quien)), len(ids) - len(ok)))
@@ -380,7 +388,7 @@ def main():
     for f in filas:
         fuentes.setdefault((f[0], int(f[1])), set()).add(f[4].get("_fuente") or "")
     ids = list(ya)
-    ok, _ = faces.filtrar_referencias(ids, [ya[i][1] for i in ids], fuentes)
+    ok, _ = faces.filtrar_referencias(ids, [ya[i][1] for i in ids], fuentes, disputadas)
     if len(ok) != len(ids):
         print("Carnets que no se guardan porque su persona tiene caras humanas: %d"
               % (len(ids) - len(ok)))

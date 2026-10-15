@@ -139,6 +139,8 @@ def main():
 
     # ── el juez: centros de caras con "Si" humano intacto
     intactos = [k for k in si if k not in no and k not in rech and k in ident and k[1] in gente]
+    # una cara en disputa abierta no es juez (faces.disputas_abiertas)
+    intactos = faces.sin_disputas(intactos, faces.disputas_abiertas(cli), "juez")
     por_persona = defaultdict(list)
     for k in intactos:
         v = huella(k)

@@ -81,6 +81,7 @@ def load_env():
 # select, y ademas asi el mapa vive en el repo, donde se ve en un diff si
 # alguien cambia una clave. Sale de pg_constraint, no de la memoria de nadie.
 CLAVES = {
+    "caras_disputadas":      ("photo_id", "person_id"),
     "caras_dudosas_vistas":  ("person_id",),
     "caras_fuente_mala":     ("person_id", "fuente"),
     "corridas":              ("id",),

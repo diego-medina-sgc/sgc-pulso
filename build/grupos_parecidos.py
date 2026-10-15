@@ -56,6 +56,7 @@ if os.environ.get("FACES_MOTOR", "").lower() != "arcface":
 
 import numpy as np  # noqa: E402
 
+import faces  # noqa: E402
 import sb  # noqa: E402
 from caras_agrupar_archivo import cargar  # noqa: E402
 
@@ -129,7 +130,9 @@ def verdad_humana(cli, clave):
         (si if l["answer"] == "yes" else no).add(k)
     rech = {(r["photo_id"], int(r["person_id"])) for r in
             cli.select("photo_people_rejected", select="photo_id,person_id")}
-    buenas = si - no - rech
+    # una cara en disputa abierta no es verdad humana (faces.disputas_abiertas)
+    buenas = faces.sin_disputas(si - no - rech, faces.disputas_abiertas(cli),
+                                "verdad humana")
 
     cara = {}
     for s in cli.select("face_suggestions", select="photo_id,person_id,bx,by",

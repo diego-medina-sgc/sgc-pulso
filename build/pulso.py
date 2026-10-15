@@ -151,18 +151,19 @@ HUSO_AR = -3                   # Argentina no tiene horario de verano
 
 
 def paso(nombre, args, entradas, quieto=True, espera_max_h=ESPERA_MAX_H, cada_h=CADA_H,
-         sin_esperar_si=(), ventana=None, requiere=()):
+         sin_esperar_si=(), ventana=None, requiere=(), a_pedido=False):
     """espera_max_h=None: espera a que nadie juegue, por mas que tarde.
     cada_h: minimo de horas entre dos corridas buenas (0: sin minimo).
     sin_esperar_si: entradas que, si cambiaron, hacen correr el paso aunque
     alguien este jugando (ver SIN ESPERAR DESPUES DE REAGRUPAR).
     ventana: (desde, hasta) en hora argentina; fuera de eso solo corre forzado.
     requiere: pasos que tienen que haber terminado bien alguna vez antes de que
-    este corra (ej. el llenado completo antes del incremental)."""
+    este corra (ej. el llenado completo antes del incremental).
+    a_pedido: nunca corre solo, solo forzado (--paso / -f paso=...)."""
     return {"nombre": nombre, "args": args, "entradas": entradas, "quieto": quieto,
             "espera_max_h": espera_max_h, "cada_h": cada_h,
             "sin_esperar_si": tuple(sin_esperar_si), "ventana": ventana,
-            "requiere": tuple(requiere)}
+            "requiere": tuple(requiere), "a_pedido": bool(a_pedido)}
 
 
 def en_ventana(p, cuando=None):
@@ -244,8 +245,12 @@ PASOS = [
     # se cumplieron el 13/9/2026: las reemplaza el paso "auditoria", al final.
     paso("no_es",          ["caras_no_es.py", "--aplicar"],
          ["db:rechazos", "npz:_caras_evento"]),
+    # DISPUTAS (15/10/2026). Una cara en disputa abierta no es referencia ni
+    # verdad humana (faces.disputas_abiertas). Abrir o cerrar una disputa cambia
+    # lo que estos pasos tienen que ver: "db:disputas" la cuenta pulso_firmas()
+    # (pedido a base); mientras no exista vale None y no dispara nada.
     paso("si_es",          ["caras_si_es.py", "--aplicar"],
-         [HUMANAS, "db:rechazos", "npz:_caras_evento"]),
+         [HUMANAS, "db:rechazos", "npz:_caras_evento", "db:disputas"]),
     # Solo de lo que confirmo una persona, y carnets para quien no tiene nada
     # humano (faces.filtrar_referencias): lo que escribe el pulso no la mueve.
     #
@@ -256,10 +261,10 @@ PASOS = [
     # pulso_firmas() (pedido a base); mientras no exista vale None, igual
     # vuelta a vuelta, y no dispara nada.
     paso("referencias",    ["faces_referencias.py"],
-         [HUMANAS, "db:retratos", "npz:_huellas_retratos", "db:fusiones"]),
-    paso("contarrefs",     ["referencias_contar.py"], ["npz:_referencias", "db:fusiones"]),
+         [HUMANAS, "db:retratos", "npz:_huellas_retratos", "db:fusiones", "db:disputas"]),
+    paso("contarrefs",     ["referencias_contar.py"], ["npz:_referencias", "db:fusiones", "db:disputas"]),
     paso("sugerencias",    ["faces_sugerir.py"],
-         ["npz:_referencias*", "npz:_huellas_retratos", "db:rechazos", "db:fusiones"]),
+         ["npz:_referencias*", "npz:_huellas_retratos", "db:rechazos", "db:fusiones", "db:disputas"]),
     paso("agrupamiento",   ["faces_agrupar.py", "--aplicar"],
          ["db:sugerencias", "db:identificaciones", "npz:_huellas_retratos"]),
     paso("identicas",      ["identicas_aprobar.py", "--aplicar"], ["db:sugerencias"]),
@@ -268,7 +273,7 @@ PASOS = [
     # la misma ventana). Un reintento tras un fallo no espera las 12 horas.
     paso("grupos",         ["caras_agrupar_archivo.py", "--aplicar", "--corte", "0.70"],
          [HUMANAS, "db:rechazos", "npz:_caras_todas",
-          "npz:_caras_evento", "npz:_referencias"], quieto=True, espera_max_h=None,
+          "npz:_caras_evento", "npz:_referencias", "db:disputas"], quieto=True, espera_max_h=None,
          cada_h=12, ventana=VENTANA_GRUPOS),
     # Las caras que no quedaron en ningun grupo, compactas, para que el visor
     # les dibuje recuadro y se puedan nombrar (sql/caras_mapa.sql).
@@ -294,7 +299,7 @@ PASOS = [
     # es solo una fecha: si el reagrupamiento no corre, no los traba; los
     # dispara una vez cuando corre (sin_esperar_si).
     paso("parecidos",      ["grupos_parecidos.py", "--aplicar"],
-         ["paso:grupos", HUMANAS, "db:rechazos"], quieto=True,
+         ["paso:grupos", HUMANAS, "db:rechazos", "db:disputas"], quieto=True,
          sin_esperar_si=DESPUES_DE_GRUPOS),
     paso("resolver",       ["grupos_resolver.py", "--escribir"],
          ["paso:grupos", "paso:parecidos", HUMANAS], quieto=True,
@@ -321,7 +326,7 @@ PASOS = [
     # resolver volvio a nombrar. Medido en caras_libres_sugerir.py.
     paso("libres",         ["caras_libres_sugerir.py", "--aplicar"],
          ["paso:resolver", HUMANAS, "db:rechazos",
-          "npz:_caras_todas", "npz:_referencias"], quieto=True),
+          "npz:_caras_todas", "npz:_referencias", "db:disputas"], quieto=True),
     # Un carnet es de una persona: cuando figuran dos y la cara decide, se saca
     # la etiqueta de maquina que pierde. Lo que tiene autoridad no se toca.
     paso("carnets",        ["carnets_dos_personas.py", "--aplicar"],
@@ -335,7 +340,7 @@ PASOS = [
     # haya puesto una persona.
     paso("auditoria",      ["caras_auditoria_humana.py", "--aplicar"],
          ["db:identificaciones", "db:rechazos", "npz:_caras_evento",
-          "npz:_huellas_retratos"], quieto=True),
+          "npz:_huellas_retratos", "db:disputas"], quieto=True),
     # Le busca la cara a quien esta identificado sin recuadro: los que se
     # corrigen desde el visor ("esta cara no es X", sql/no_es_esta_cara.sql)
     # y los que vienen sin saber cual es. Validado el 13/9/2026 contra 5.102
@@ -365,6 +370,11 @@ PASOS = [
     # incremental haria el completo con alguien jugando.
     paso("foto_perfil",    ["foto_perfil_refrescar.py", "--aplicar"], [], quieto=False,
          requiere=("foto_perfil_todo",)),
+    # MEDICIONES, SOLO A PEDIDO (15/10/2026). No escriben nada del
+    # reconocimiento: dejan numeros en corridas (tarea 'medicion') para decidir
+    # reglas. Corren aca porque las huellas al dia solo estan en el pulso.
+    #   gh workflow run pulso.yml --repo <dueño>/sgc-pulso -f paso=medir_carnets
+    paso("medir_carnets",  ["medir_carnets.py", "--anotar"], [], quieto=False, a_pedido=True),
 ]
 
 
@@ -581,6 +591,8 @@ def decidir(p, db, estados, forzar):
     f = firma(p, db, estados)
     if forzar:
         return True, "forzado", f, None
+    if p.get("a_pedido"):
+        return False, "solo a pedido (-f paso=%s)" % p["nombre"], f, None
 
     falta = [r for r in p.get("requiere", ()) if not (estados.get(r) or {}).get("ultimo_ok")]
     if falta:
