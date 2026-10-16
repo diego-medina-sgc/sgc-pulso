@@ -2,7 +2,7 @@
 """Lee el Padron Completo -el sheet unico- y dice que cambiaria en el padron.
 
     python padron_unico.py                # mide y no escribe (ensayo)
-    python padron_unico.py --hoja base    # solo una pestaña
+    python padron_unico.py --hoja staff   # solo una pestaña (staff | alumnos | alumni)
 
 POR QUE (23/9/2026)
 
@@ -17,9 +17,11 @@ nombres distintos y sedes distintas. Sobre esos numeros se decide.
 
 LAS TRES PESTAÑAS
 
-  base              staff y ex staff, ya unificados por Diego. 1.765 filas de
-                    tres origenes que colapsan por su clave: apellido + las
-                    tres primeras letras del nombre.
+  Staff/Ex Staff    staff y ex staff unificados por Diego: una fila por
+                    persona (columna Clave = apellido|tres letras del nombre),
+                    con Sede/Campus, Status, mails, Foto y Fuentes. Hasta el
+                    15/10/2026 se leia "base", la pila cruda de los tres
+                    origenes (report, replies, staff) de la que se arma esta.
   Alumnos actuales  el export de iSAMS, mismas columnas que la fuente de hoy.
   Alumni            exalumnos: nombre, apellido, sede y camada.
 
@@ -109,9 +111,11 @@ def col(fila, i, nombre):
 
 
 def leer(h, hoja, hasta="Z"):
+    """Toda la pestaña. El nombre va entre comillas simples y la "/" se
+    codifica: "Staff/Ex Staff" sin eso da 400 Bad Request."""
     import urllib.parse
-    r = h._pedir("GET", SHEET + "/values/"
-                 + urllib.parse.quote("%s!A1:%s20000" % (hoja, hasta)))
+    rango = "'%s'!A1:%s20000" % (hoja.replace("'", "''"), hasta)
+    r = h._pedir("GET", SHEET + "/values/" + urllib.parse.quote(rango, safe=""))
     v = r.get("values", [])
     if not v:
         return [], {}
@@ -120,25 +124,38 @@ def leer(h, hoja, hasta="Z"):
 
 # ---------------------------------------------------------------- pestañas
 
+HOJA_STAFF = "Staff/Ex Staff"
+STAFF_CHOQUES = []   # filas con la clave de otra persona (se listan)
+
+
 def staff(h):
-    """La hoja base: una fila por origen, una persona por clave."""
-    filas, i = leer(h, "base")
+    """Staff/Ex Staff: la pestaña unificada, una fila por persona.
+
+    La clave la trae la hoja (columna Clave, apellido|tres letras del nombre);
+    si una fila viene sin ella se calcula igual. Si dos filas dieran la misma
+    clave, se completa la primera con lo que falte, como hacia la lectura de
+    "base"."""
+    filas, i = leer(h, HOJA_STAFF)
     gente = {}
     for f in filas:
         nom, ape = col(f, i, "nombre"), col(f, i, "apellido")
         if not nom or not ape:
             continue
-        # la clave de Diego: apellido + tres letras del nombre. Es lo que hace
-        # que las tres hojas de origen colapsen en una persona.
-        k = clave(ape) + "|" + clave(nom)[:3]
+        k = col(f, i, "clave") or (clave(ape) + "|" + clave(nom)[:3])
+        # dos filas con la misma clave y otro nombre (un apellido escrito con una
+        # letra de mas o de menos) son dos filas que la hoja no unifico: no se pisan,
+        # quedan separadas y se cuentan
+        if k in gente and clave(gente[k]["nombre"]) != clave(titulo(nom + " " + ape)):
+            k = k + "|" + clave(nom + " " + ape)
+            STAFF_CHOQUES.append(titulo(nom + " " + ape))
         p = gente.setdefault(k, {"nombre": titulo(nom + " " + ape), "mail": "",
                                  "foto": "", "sede": None, "estado": "",
                                  "origenes": set()})
-        p["origenes"].add(col(f, i, "origen"))
+        p["origenes"].update(col(f, i, "fuentes").split())
         p["mail"] = p["mail"] or col(f, i, "email institucional").lower() \
             or col(f, i, "email personal").lower()
         p["foto"] = p["foto"] or col(f, i, "foto")
-        p["sede"] = p["sede"] or SEDES.get(col(f, i, "sede").lower())
+        p["sede"] = p["sede"] or SEDES.get(col(f, i, "sede/campus").lower())
         p["estado"] = p["estado"] or col(f, i, "status")
     return gente
 
@@ -370,7 +387,10 @@ def comparar(nombre_hoja, gente, por_clave, corr, campo_sede=True, por_alias=Non
             if valor and not p.get(campo):
                 faltan[campo] = valor
             elif valor and p.get(campo) and campo == "house" \
-                    and valor not in p["house"].split(" / "):
+                    and not set(valor.split(" / ")) <= set(p["house"].split(" / ")):
+                # house por house: antes el valor entero del sheet ("Stevenson /
+                # Lockwood") se buscaba entre las partes de la ficha y toda
+                # house doble salia distinta (1.478 falsas el 15/10)
                 # la ficha ya tiene otra: no se pisa, se lista
                 distintas.append((p, p["house"], valor))
         if faltan:
@@ -512,7 +532,7 @@ def aplicar(cli, res, kind, fuente, solo_completar=False):
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hoja", default="", help="base | alumnos | alumni")
+    ap.add_argument("--hoja", default="", help="staff | alumnos | alumni")
     ap.add_argument("--aplicar", action="store_true")
     ap.add_argument("--solo-completar", action="store_true",
                     help="con --aplicar: solo llena campos vacios (house, camada)")
@@ -531,9 +551,11 @@ def main():
     dudosas = []
     if quiere in ("", "base", "staff"):
         st = staff(h)
-        print("\n(base: %d personas; por estado: %s)"
-              % (len(st), dict(Counter(x["estado"] or "sin estado" for x in st.values()))))
-        res = comparar("Staff (hoja base)", st, por_clave, corr, por_alias=por_alias)
+        print("\n(%s: %d personas; por estado: %s)"
+              % (HOJA_STAFF, len(st), dict(Counter(x["estado"] or "sin estado" for x in st.values()))))
+        for n in STAFF_CHOQUES:
+            print("   misma clave que otra fila, nombre distinto (quedan separadas): %s" % n)
+        res = comparar("Staff (%s)" % HOJA_STAFF, st, por_clave, corr, por_alias=por_alias)
         if a.aplicar:
             dudosas += sorted(aplicar(cli, res, "staff", "staff_sheet", a.solo_completar))
             # El Status de la hoja dice quien sigue y quien se fue, que hasta

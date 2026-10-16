@@ -149,6 +149,12 @@ RE_KINDER = re.compile(r"\b(prek|pre\s*k|pre-k|k[123])\s*([gs])?\b")
 RE_PRIMARY_Y = re.compile(r"\b(?:y|year)\s*([1-6])\s*([gs])?\b")
 RE_PRIMARY_N = re.compile(r"\b([1-6])\s*([gs])\b")          # 1G, 4S
 RE_SECONDARY = re.compile(r"\bs\s*([1-6])\b")               # S1..S6
+# C1..C6, el codigo institucional tal cual (15/10/2026). Desde 2025 las
+# carpetas de North se nombran asi ("2026-03-27 - C6 mugshots", "C3 Trip to
+# Jujuy") y quedaban sin nivel: 18 carpetas, 6 de carnets, y sus carnets no se
+# podian cruzar con la camada del alumno. "2c" (division) no entra: el \b
+# pide que la c empiece la palabra.
+RE_COLLEGE_C = re.compile(r"\bc\s*([1-6])\b")
 
 # términos de sede, para no confundir "South" con la división S
 RE_SITE_NORTH = re.compile(r"\bnorth\b")
@@ -179,9 +185,10 @@ def parse_levels(t):
         sections.add("Prep")
         divisions.add(m.group(2).upper())
 
-    for m in RE_SECONDARY.finditer(t):
-        levels.append("C" + m.group(1))
-        sections.add("College")
+    for rx in (RE_SECONDARY, RE_COLLEGE_C):
+        for m in rx.finditer(t):
+            levels.append("C" + m.group(1))
+            sections.add("College")
 
     if has(t, "kinder", "jardin"):
         sections.add("Kinder")
