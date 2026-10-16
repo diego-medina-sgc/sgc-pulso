@@ -29,7 +29,10 @@ import numpy as np  # noqa: E402
 import faces  # noqa: E402
 import sb  # noqa: E402
 
-TOPE_MB = 25          # si ocuparia mas, no escribe: la base esta cerca de los 500 MB
+# Freno contra un calculo desbocado, no control de disco: ese vive en salud()
+# (renglon base_mb). 300 MB es el doble del peor caso medido el 15/10/2026
+# con el piso mas bajo, sobre 8 GB de Supabase Pro.
+TOPE_MB = 300
 
 
 def main():
@@ -73,8 +76,9 @@ def main():
     print("  ocuparia ~%.1f MB (tope %d MB)" % (mb, TOPE_MB))
 
     if mb > TOPE_MB:
-        print("\nNO SE ESCRIBE: ocuparia mas del tope.")
-        return
+        # Sale con error: un return dejaba el paso como "listo" en el pulso, con
+        # firma nueva, y el mapa quedaba viejo sin que nadie se enterara.
+        sys.exit("NO SE ESCRIBE: ocuparia ~%.1f MB, mas del tope de %d MB." % (mb, TOPE_MB))
     if not a.aplicar:
         print("\nEnsayo: no se escribio nada. Agregar --aplicar. (%.0f s)" % (time.time() - t0))
         return

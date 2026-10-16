@@ -415,6 +415,20 @@ CONF_MIN = 0.75
 # Una cara más chica que esto no tiene píxeles suficientes para reconocerla,
 # y en una foto de acto escolar hay decenas asi al fondo.
 LADO_MIN = 44
+# El piso de las fotos de EVENTO, medido sobre la miniatura de 1600 px que bajan
+# faces_eventos.py y caras_huellas_evento.py: lo que queda abajo no se guarda en
+# _caras_todas, y entonces tampoco se agrupa, ni tiene recuadro, ni se propone.
+# Vive aca y no en cada script para que el que guarda y el que verifica midan
+# con la misma vara.
+#
+# Era 80. Tabla del 15/10/2026 (dejando afuera las referencias de la misma
+# carpeta, contra 46.213 referencias): las 89 caras REALES confirmadas por una
+# persona de 60 a 79 px dieron 0 % de error con referencia (46,4 % de acierto a
+# 0,60; 69,0 % a 0,55 con margen 0,10) y 2,2 % sin referencia, igual que las de
+# 80 a 119 px (0 % / 1,0-1,3 %). Abajo de 60 hay solo 15 caras reales (44 a 59
+# px): no alcanza para bajar mas. Muestra de 3.131 fotos del archivo: con 60 px
+# se guardan 1,46 veces las caras de hoy (1,41-1,50).
+LADO_EVENTOS = 60
 # A qué tamaño se detecta. YuNet fue entrenado a 320 px: sobre una foto de
 # 1920 deja de ver caras que encuentra sin problema al achicarla. 800 anda
 # bien tanto en retratos como en fotos de grupo.

@@ -20,6 +20,7 @@ Dos diferencias con los retratos, que cambian el diseño:
 """
 import argparse
 import os
+import re
 import sys
 import threading
 import urllib.error
@@ -48,8 +49,10 @@ from index_drive import Drive, SA_PATH
 # fotos con alguien, 64 personas en la misma muestra de 200).
 HILOS = int(os.environ.get("FACES_HILOS", "10"))
 # En una foto de grupo las caras chicas del fondo no tienen pixeles para
-# reconocerlas; medido antes, con 80 px hay ~1,4 caras utiles por foto.
-LADO_MIN = 80
+# reconocerlas. El piso es faces.LADO_EVENTOS (60 px desde el 15/10/2026, antes
+# 80): ahi esta la medicion. Se deja el nombre porque caras_huellas_evento.py
+# lo importa de aca.
+LADO_MIN = faces.LADO_EVENTOS
 # Mas exigente que en los retratos: una etiqueta equivocada en la foto de un
 # acto la ve la familia, y molesta mas que una que falta.
 UMBRAL = faces.umbral("eventos")
@@ -259,6 +262,90 @@ def anotar_revisadas(cli, fol, conteo, por_carpeta, medidas, fallidas):
 # incompletos y cortar justo dejaria afuera casos reales.
 MARGEN = 1
 
+# LA CAMADA EN SUS PROPIOS EVENTOS (15/10/2026)
+#
+# El filtro de años deja afuera a los exalumnos justo en los eventos que son
+# suyos: en un asado de camada 2004 sacado en 2024, de las 106 fichas de esa
+# camada solo 1 era candidata (last_seen 2004 + MARGEN no llega a 2024), y de
+# sus 34 caras de referencia, 1. Medido sobre las 9 caras guardadas de ese
+# album: sin el filtro la mejor da 0,696 contra su ficha; con el filtro, 0,395
+# contra cualquiera.
+#
+# Si la ruta de la carpeta dice "Camada NNNN" o "Camada NN", la galeria de ese
+# album es LA CAMADA MAS EL STAFF DE ESE AÑO, y no la del año. Sumar la camada
+# a la del año (primera version) dejaba entrar a los alumnos actuales: en la
+# simulacion del asado 2004 (2024, bajada a 4000 y piso 44) un alumno de
+# 2021-2026 con 53 referencias se llevaba 3 de 12 propuestas, sobre adultos.
+# A un asado de exalumnos van los exalumnos de esa camada y, a veces, gente del
+# colegio; los chicos que hoy cursan, no. El staff de ese año: ver
+# staff_del_anio(). Patrones
+# en los titulos reales (15/10/2026, 13 carpetas, 255 fotos primarias):
+#     "Asado de Camada 2004", "Camada 2015 asado", "Asado camada 1972",
+#     "Asado camada 97 (25 años)", "Festejo 30 Aniversario-Camada 88-21&22/12/2018"
+# Se mira la ruta y no solo el nombre para que una subcarpeta de un album de
+# camada herede la camada.
+CAMADA_EN_TITULO = re.compile(r"camada\s+(\d{4}|\d{2})(?!\d)", re.IGNORECASE)
+
+
+def camada_de(texto, anio):
+    """La camada que nombra una ruta de carpeta, o None.
+
+    Con dos cifras se toma el siglo que no queda en el futuro de la foto:
+    "Camada 98" en 2018 es 1998, "Camada 04" en 2024 es 2004. Una camada
+    posterior al año de la foto (mas uno, por los eventos de fin de año) no
+    tiene sentido y se ignora.
+    """
+    m = CAMADA_EN_TITULO.search(texto or "")
+    if not m:
+        return None
+    n = int(m.group(1))
+    if len(m.group(1)) == 2:
+        n = 2000 + n if 2000 + n <= anio else 1900 + n
+    if n < 1900 or n > anio + 1:
+        return None
+    return n
+
+
+def staff_del_anio(cli, gente, anio):
+    """Las fichas de staff que pueden estar en una foto de ese año.
+
+    El padron no dice desde ni hasta cuando trabajo cada uno (ver
+    staff_sin_cursada.py: no hay planilla con esas fechas), asi que se usa lo
+    que si hay:
+
+      - staff actual (ex_staff no marcado): entra. No hay fecha de alta, y
+        dejarlo afuera es el error de la Fiesta de Fin de Año 2025.
+      - ex staff: entra solo si tiene alguna foto identificada con año entre
+        su primera y su ultima, mas MARGEN de cada lado. Sin fotos con año, no
+        entra: no hay como saber si trabajaba ese año.
+      - la misma regla de estuvo(): quien fue alumno no entra en las fotos de
+        antes de su camada.
+
+    first_seen/last_seen no se usan: en el staff salen del año de un retrato,
+    no de cuando trabajo.
+    """
+    staff = {int(p): g for p, g in gente.items() if g.get("kind") == "staff"}
+    ex = sorted(p for p, g in staff.items() if g.get("ex_staff"))
+    anios = {}
+    for i in range(0, len(ex), 100):
+        for r in cli.select("photo_people", select="person_id,photos(year,folders(year))",
+                            person_id="in.(%s)" % ",".join(map(str, ex[i:i + 100]))):
+            ph = r.get("photos") or {}
+            y = ph.get("year") or (ph.get("folders") or {}).get("year")
+            if y:
+                p = int(r["person_id"])
+                lo, hi = anios.get(p, (y, y))
+                anios[p] = (min(lo, y), max(hi, y))
+    out = set()
+    for p, g in staff.items():
+        if g.get("cohort") is not None and anio <= g["cohort"]:
+            continue
+        if not g.get("ex_staff"):
+            out.add(p)
+        elif p in anios and anios[p][0] - MARGEN <= anio <= anios[p][1] + MARGEN:
+            out.add(p)
+    return out
+
 
 def avisar(cli, anio, total, hechas, con_gente, personas, estado, mensaje=None,
            callar=False):
@@ -322,7 +409,7 @@ def main():
     # terminada hace años. Y como el filtro era excluyente -si figuraba, solo
     # se lo buscaba en esos años- a esos 130 los descartaba sin mirarles la
     # cara.
-    gente = {p["id"]: p for p in cli.select("people", select="id,display_name,first_seen,last_seen,kind")}
+    gente = {p["id"]: p for p in cli.select("people", select="id,display_name,first_seen,last_seen,kind,cohort,ex_staff")}
     # cuantas caras de referencia tiene cada uno: es lo que decide si se le
     # cree una propuesta de parecido bajo
     caras_de = Counter(int(r["person_id"]) for r in
@@ -377,15 +464,35 @@ def main():
           % (len(vecs), a.anio, int(elegible.sum())))
     if not elegible.any():
         sys.exit("Ninguna persona conocida estuvo en el colegio ese año.")
-    vecs_ok = vecs[elegible]
-    pers_ok = personas[elegible]
-    anios_ok = anios_ref[elegible]
+    del_anio = set(int(p) for p in personas[elegible])
 
     # fotos de evento de ese año
-    conteo = {f["id"]: int(f.get("photo_count") or 0)
-              for f in cli.select("folders", select="id,year,is_mugshot,noise,photo_count")
-              if not f.get("is_mugshot") and f.get("year") == a.anio and f.get("noise") is None}
+    carpetas = [f for f in cli.select("folders", select="id,year,is_mugshot,noise,photo_count,path,name")
+                if not f.get("is_mugshot") and f.get("year") == a.anio and f.get("noise") is None]
+    conteo = {f["id"]: int(f.get("photo_count") or 0) for f in carpetas}
     fol = list(conteo)
+
+    # La galeria de cada carpeta: la del año y, en un album de camada, la de
+    # esa camada mas el staff del año (ver CAMADA_EN_TITULO). Una por camada,
+    # no por carpeta.
+    camada_carpeta = {}
+    for f in carpetas:
+        c = camada_de(f.get("path") or f.get("name"), a.anio)
+        if c is not None:
+            camada_carpeta[f["id"]] = c
+    galerias = {None: (vecs[elegible], personas[elegible], anios_ref[elegible])}
+    if camada_carpeta:
+        cohorte = np.array([int((gente.get(int(p)) or {}).get("cohort") or 0) for p in personas])
+        del_staff = np.isin(personas, sorted(staff_del_anio(cli, gente, a.anio)))
+        for c in sorted(set(camada_carpeta.values())):
+            de_camada = cohorte == c
+            m = de_camada | del_staff
+            galerias[c] = (vecs[m], personas[m], anios_ref[m])
+            print("  album de camada %d: %d referencias (%d personas de la camada, "
+                  "%d del staff de %d); la del año tiene %d"
+                  % (c, int(m.sum()), len(set(personas[de_camada].tolist())),
+                     len(set(personas[del_staff & ~de_camada].tolist())), a.anio,
+                     int(elegible.sum())))
     # Una carpeta sola, o varias. Sirve para volver a pasar un album despues de
     # cambiar algo -el filtro de cursada, el umbral- sin repetir el ano entero,
     # que son horas; y es lo que usa caras_revisar.py para los albumes que no
@@ -463,6 +570,7 @@ def main():
         alto, ancho = img.shape[:2]
 
         filas, vistos = [], set()
+        vecs_ok, pers_ok, anios_ok = galerias[camada_carpeta.get(carpeta_de[pid])]
         caras = [x for x in c.detectar(img) if min(x[2], x[3]) >= LADO_MIN]
         for cara in caras:
             h = c.huella(img, cara)
@@ -475,6 +583,10 @@ def main():
                 todas.append((pid, (round(x0 / ancho, 4), round(y0 / alto, 4),
                                     round(w0 / ancho, 4), round(h0 / alto, 4)), h))
             s = vecs_ok @ h
+            if not len(s):
+                # album de camada sin referencias de la camada ni del staff:
+                # la cara queda guardada, no hay contra quien compararla
+                continue
             k = int(np.argmax(s))
             if s[k] < a.umbral:
                 continue
@@ -497,6 +609,12 @@ def main():
                           "bw": round(w / ancho, 4), "bh": round(hh / alto, 4)})
             with lock:
                 huellas.append((pid, p, h))
+                if p not in del_anio:
+                    cuenta["por_camada"] += 1
+                if a.ensayo and a.carpeta:
+                    print("  propuesta  foto %s  persona %d  %.3f%s"
+                          % (pid, p, float(s[k]),
+                             "  (por camada)" if p not in del_anio else ""))
             with lock:
                 # el staff no tiene año de referencia: se marca -1 y contarlo
                 # como distancia daria 2022 años
@@ -575,6 +693,14 @@ def main():
     print("Fotos con alguien:       %d  (%.0f%%)" % (cuenta["con_gente"], 100.0 * cuenta["con_gente"] / n))
     print("Personas reconocidas:    %d  (%.2f por foto)" % (cuenta["personas"], cuenta["personas"] / n))
     print("Errores de descarga:     %d" % cuenta["error"])
+    if camada_carpeta:
+        print("Albums de camada en esta corrida: %d   propuestas que entran por la camada: %d"
+              % (len(set(camada_carpeta) & set(fol)), cuenta["por_camada"]))
+    if a.ensayo and acumulado:
+        # solo lee: cuantas de las propuestas serian nuevas de verdad
+        quedan = sin_pisar(cli, acumulado, cuenta)
+        print("Propuestas nuevas (no estaban sugeridas ni identificadas): %d de %d"
+              % (len(quedan), len(acumulado)))
     if cuenta["ya_estaban"]:
         print("Propuestas que ya existian y no se pisaron: %d" % cuenta["ya_estaban"])
     if cuenta["poco_conocida"]:
