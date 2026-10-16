@@ -110,6 +110,44 @@ jobs:
           if [ ! -f ../estado/manifiesto.json ]; then python estado.py bajar ../estado; fi
           python estado.py descifrar ../estado
 
+      # "QUE SE VE" (14/10/2026). Todo lo de escenas va DESPUES del estado de
+      # caras y con continue-on-error: si falla, el reconocimiento de caras
+      # corre igual. Sin la marca _escenas_estado.ok (la deja "traer"), el paso
+      # escenas no corre y su estado no se guarda: asi un estado que no se pudo
+      # traer nunca pisa en el bucket al bueno.
+      # El modelo CLIP es publico (revision fija y sha256 en escenas_clip.py).
+      - name: Modelo de escenas
+        id: modelo_escenas
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: build/modelos_escenas
+          key: modelos-escenas-clip-b32-d15189d7
+
+      - name: Bajar el modelo de escenas
+        if: steps.modelo_escenas.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          cd build
+          python escenas_procesar.py --bajar-modelo
+
+      # Estado propio: otra carpeta, otra cache (escenas-v1-*) y otro prefijo
+      # del bucket (escenas/). Nunca *_arcface.npz.
+      - name: Estado de escenas (cifrado)
+        id: cache_escenas
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: estado-escenas
+          key: escenas-v1-${{ github.run_id }}
+          restore-keys: escenas-v1-
+
+      - name: Traer el estado de escenas
+        continue-on-error: true
+        run: |
+          cd build
+          python estado.py --conjunto escenas traer ../estado-escenas
+
       - name: Pulso
         env:
           # por variable y no pegado en el script: el valor no se interpreta
@@ -145,6 +183,39 @@ jobs:
         with:
           path: estado
           key: estado-${{ github.run_id }}
+
+      # Escenas: al bucket cada vez que cambia (solo los trozos que cambiaron);
+      # a la cache solo cuando cambia la clave (cada 5 trozos o una vez por
+      # dia, estado.py clave_cache): una copia entera por vuelta llenaria la
+      # cache de Actions (10 GB) durante el llenado.
+      - name: Guardar el estado de escenas
+        id: guardar_escenas
+        if: success() && inputs.ensayo != true
+        continue-on-error: true
+        run: |
+          cd build
+          if [ ! -f _escenas_estado.ok ]; then
+            echo "el estado de escenas no se trajo: no se guarda"
+            echo "cambio=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if python estado.py --conjunto escenas cambio ../estado-escenas; then
+            echo "sin cambios en escenas"
+            echo "cambio=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python estado.py --conjunto escenas cifrar ../estado-escenas
+          python estado.py --conjunto escenas subir ../estado-escenas
+          echo "cambio=si" >> "$GITHUB_OUTPUT"
+          echo "clave=$(python estado.py --conjunto escenas clave-cache ../estado-escenas)" >> "$GITHUB_OUTPUT"
+
+      - name: Guardar la cache de escenas
+        if: success() && steps.guardar_escenas.outputs.cambio == 'si' && steps.guardar_escenas.outputs.clave != steps.cache_escenas.outputs.cache-matched-key
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: estado-escenas
+          key: ${{ steps.guardar_escenas.outputs.clave }}
 
       - name: Limpiar credenciales
         if: always()
