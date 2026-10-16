@@ -148,6 +148,9 @@ LOCK_VIEJO_H = 12
 # (paso_esperando). Fuera de la ventana no se anota "esperando".
 VENTANA_GRUPOS = (2, 5)        # hora argentina en que puede arrancar: [2, 5)
 HUSO_AR = -3                   # Argentina no tiene horario de verano
+# Lo contrario: lo que no tiene que arrancar mientras puede reagrupar (el paso
+# escenas, que suma ~20 min a la vuelta y atrasaria el reagrupamiento).
+FUERA_DE_GRUPOS = (VENTANA_GRUPOS[1], VENTANA_GRUPOS[0])
 
 
 def paso(nombre, args, entradas, quieto=True, espera_max_h=ESPERA_MAX_H, cada_h=CADA_H,
@@ -172,6 +175,9 @@ def en_ventana(p, cuando=None):
         return True
     h = ((cuando or dt.datetime.now(dt.timezone.utc))
          + dt.timedelta(hours=HUSO_AR)).hour
+    if v[0] > v[1]:
+        # pasa la medianoche: (5, 2) es de 5 a 24 y de 0 a 2 (ver FUERA_DE_GRUPOS)
+        return h >= v[0] or h < v[1]
     return v[0] <= h < v[1]
 
 
@@ -228,7 +234,7 @@ PASOS = [
     paso("huellas",        ["faces_huellas.py"], ["db:retratos"]),
     # Los albumes de evento que no pasaron enteros por el detector: sin esto
     # sus caras no tienen recuadro, grupo ni "+ ¿Quién es?" (13/9/2026, la
-    # cara de Persona E; sql/caras_revisadas.sql). Antes de los que leen
+    # cara de un alumno; sql/caras_revisadas.sql). Antes de los que leen
     # _caras_todas, asi la misma vuelta los agrupa y les pone recuadro.
     paso("caras",          ["caras_revisar.py", "--aplicar"], ["db:caras_pendientes"]),
     # FUERA DEL PULSO desde el 12/9/2026: incoherentes y malarchivadas.
@@ -378,6 +384,19 @@ PASOS = [
     # incremental haria el completo con alguien jugando.
     paso("foto_perfil",    ["foto_perfil_refrescar.py", "--aplicar"], [], quieto=False,
          requiere=("foto_perfil_todo",)),
+    # "QUE SE VE" (14/10/2026, sql/vision_escenas.sql; fase 1.2 del plan de
+    # vision). Ultimo: no lee nada de caras y no tiene que atrasar a ninguno.
+    # Sin entradas: corre todas las vueltas, porque lo que tiene que hacer son
+    # las fotos que el modelo no paso (escenas_pendientes), y eso no esta en
+    # pulso_firmas(); sin nada pendiente termina en segundos. La firma
+    # "escenas" de pulso_firmas() (respuestas del juego) NO lo dispara: la capa
+    # se reentrena cambiando escenas_entrenar.VERSION, no con cada respuesta
+    # (ver ahi por que). Tope propio de ~20 min o 15.000 fotos por vuelta.
+    # quieto=False: escribe solo tablas de escenas, no le cambia nada en la
+    # mano a quien juega. No arranca mientras puede correr "grupos".
+    # Sus .npz viajan en su propio estado cifrado (estado.py --conjunto escenas).
+    paso("escenas",        ["escenas_procesar.py", "--aplicar"], [], quieto=False,
+         ventana=FUERA_DE_GRUPOS),
 ]
 
 
