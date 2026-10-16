@@ -351,6 +351,14 @@ PASOS = [
     # las dos fichas (sql/fusionar_juego.sql).
     paso("fichas",         ["fichas_parecidas.py", "--aplicar"],
          ["db:identificaciones", "npz:_referencias"], quieto=True),
+    # LOS CARNETS DE MAQUINA, MEDIDOS (15/10/2026). Una vez por dia: cada
+    # carnet que nombro la maquina contra las caras humanas de su ficha, a
+    # carnets_medidos (y el resumen a corridas, tarea 'medicion'). La foto de
+    # perfil no usa un carnet de maquina que no coincide, asi que va antes de
+    # foto_perfil_todo y despues de referencias. Las huellas al dia solo
+    # estan aca, en el pulso. Forzarlo:
+    #   gh workflow run pulso.yml --repo <dueño>/sgc-pulso -f paso=medir_carnets
+    paso("medir_carnets",  ["medir_carnets.py", "--anotar"], [], quieto=True, cada_h=24),
     # LA FOTO DE PERFIL (13/10/2026, sql/foto_de_perfil.sql). Al final: lee lo
     # que dejan todos los de arriba (identificaciones, rechazos, recuadros,
     # caras de grupos y mapa). La regla y la escritura son de la base.
@@ -370,11 +378,6 @@ PASOS = [
     # incremental haria el completo con alguien jugando.
     paso("foto_perfil",    ["foto_perfil_refrescar.py", "--aplicar"], [], quieto=False,
          requiere=("foto_perfil_todo",)),
-    # MEDICIONES, SOLO A PEDIDO (15/10/2026). No escriben nada del
-    # reconocimiento: dejan numeros en corridas (tarea 'medicion') para decidir
-    # reglas. Corren aca porque las huellas al dia solo estan en el pulso.
-    #   gh workflow run pulso.yml --repo <dueño>/sgc-pulso -f paso=medir_carnets
-    paso("medir_carnets",  ["medir_carnets.py", "--anotar"], [], quieto=False, a_pedido=True),
 ]
 
 

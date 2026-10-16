@@ -82,6 +82,7 @@ def load_env():
 # alguien cambia una clave. Sale de pg_constraint, no de la memoria de nadie.
 CLAVES = {
     "caras_disputadas":      ("photo_id", "person_id"),
+    "carnets_medidos":       ("photo_id", "person_id"),
     "caras_dudosas_vistas":  ("person_id",),
     "caras_fuente_mala":     ("person_id", "fuente"),
     "corridas":              ("id",),

@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Cuanto se equivoca la maquina cuando nombra un carnet. Solo mide.
+"""Cuanto se equivoca la maquina cuando nombra un carnet, carnet por carnet.
 
     python medir_carnets.py              # mide y muestra totales; no escribe
-    python medir_carnets.py --anotar     # ademas deja el resultado en corridas
+    python medir_carnets.py --anotar     # deja el resumen en corridas y cada
+                                         # carnet juzgado en carnets_medidos
 
-Corre en el pulso solo a pedido:
-    gh workflow run pulso.yml --repo <dueño>/sgc-pulso -f paso=medir_carnets
+Corre en el pulso una vez por dia (paso medir_carnets), antes de la foto de
+perfil completa: desde el 15/10/2026 Diego aprobo usar la medicion como
+filtro, y un carnet de maquina que no coincide (parecido < 0,50 contra las
+caras humanas de su ficha) no va a la portada. La base lee carnets_medidos.
+Medido en el pulso el 15/10: face 0,70%, staff 0,12%, cluster 5,6%, face_auto
+8,7%; portada 3,8%.
 
 POR QUE (15/10/2026)
 
@@ -179,6 +184,61 @@ def imprimir(titulo, res):
                  f(v["claramente_otra_pct"])))
 
 
+TABLA = "carnets_medidos"
+
+
+def tabla_falta(err):
+    """La tabla todavia no existe (la crea base): PostgREST dice PGRST205 o
+    Postgres 42P01."""
+    s = str(err)
+    return "PGRST205" in s or "42P01" in s or ("404" in s and TABLA in s)
+
+
+def guardar_medidos(cli, filas, ahora=None):
+    """Deja en carnets_medidos un renglon por carnet juzgado HOY, y borra los
+    que ya no estan (confirmados por una persona, rechazados, sin huella o sin
+    caras humanas contra que medir: una medicion vieja no puede seguir
+    decidiendo la portada). Devuelve (escritos, borrados) o None si la tabla
+    todavia no existe (avisa y sigue). Cualquier otro error sube: no se marca
+    al dia algo que fallo.
+
+    Respaldo de lo que se borra en build/_carnets_medidos_borrados_*.txt (se
+    recalcula todos los dias, pero nada se borra sin respaldo)."""
+    ahora = ahora or dt.datetime.now(dt.timezone.utc).isoformat()
+    corte = faces.umbral("sugerir")
+    nuevos = {}
+    for x in filas:
+        if x[4] != "juzgable":
+            continue
+        nuevos[(x[1], int(x[0]))] = {"photo_id": x[1], "person_id": int(x[0]),
+                                     "parecido": round(float(x[5]), 4),
+                                     "coincide": bool(x[5] >= corte), "medido_at": ahora}
+    try:
+        viejos = cli.select(TABLA, select="photo_id,person_id,parecido,coincide,medido_at")
+    except Exception as e:
+        if tabla_falta(e):
+            print("AVISO: la tabla %s todavia no existe (la crea base); no se guardo el "
+                  "detalle, solo el resumen." % TABLA)
+            return None
+        raise
+    sobran = [r for r in viejos if (r["photo_id"], int(r["person_id"])) not in nuevos]
+    escritos = cli.upsert(TABLA, list(nuevos.values()), on_conflict="photo_id,person_id")
+    if sobran:
+        nom = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "_carnets_medidos_borrados_%s.txt" % time.strftime("%Y%m%d_%H%M"))
+        with open(nom, "w", encoding="utf-8") as fh:
+            for r in sobran:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        por_persona = defaultdict(list)
+        for r in sobran:
+            por_persona[int(r["person_id"])].append(r["photo_id"])
+        for p, ids in por_persona.items():
+            for i in range(0, len(ids), 100):
+                cli.delete(TABLA, person_id="eq.%d" % p,
+                           photo_id="in.(%s)" % ",".join(ids[i:i + 100]))
+    return escritos, len(sobran)
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -238,8 +298,13 @@ def main():
     print("\n(%.0f s)" % (time.time() - t0))
 
     if not a.anotar:
-        print("Ensayo: no se escribio nada. Con --anotar queda en corridas (tarea medicion).")
+        print("Ensayo: no se escribio nada. Con --anotar queda en corridas (tarea medicion) "
+              "y en %s." % TABLA)
         return 0
+    g = guardar_medidos(cli, filas)
+    if g is not None:
+        print("%s: %d carnets medidos escritos, %d que ya no estan borrados." % (TABLA, g[0], g[1]))
+        res["carnets_medidos"] = {"escritos": g[0], "borrados": g[1]}
     cli.upsert("corridas", [{
         "tarea": "medicion", "etiqueta": "carnets_maquina", "estado": "listo",
         "mensaje": json.dumps(res, ensure_ascii=False),
