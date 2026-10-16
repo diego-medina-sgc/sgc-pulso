@@ -148,6 +148,25 @@ CACHE_CARAS = faces.npz("_caras_evento.npz")
 # pregunta: confirmar dibuja el cuadrado sobre la foto.
 CACHE_TODAS = faces.npz("_caras_todas.npz")
 
+# La marca de lo que escribe este script en face_suggestions.origen (16/10/2026).
+# Hasta aca quedaba null, junto con todo lo que no es 'libres'. Con la marca, el
+# repaso del archivo con el piso de 60 se puede contar y revertir por origen.
+# Ninguna funcion de la base filtra por un valor que no sea 'libres'
+# (approve_face_suggestions usa "is distinct from 'libres'"), asi que 'eventos'
+# se trata igual que null.
+ORIGEN = "eventos"
+
+# Dos recuadros son la misma cara si el centro de uno cae a menos de esta
+# fraccion del lado del mas chico del centro del otro (en ancho y en alto).
+#
+# Medido el 16/10/2026 sobre face_suggestions entera con este mismo criterio:
+#   - 1.863 sugerencias sin contestar estan sobre una cara que ya tiene otro
+#     nombre confirmado (81 escritas DESPUES de la confirmacion: un repaso);
+#   - 86 pares de sugerencias sin contestar, de dos personas distintas, sobre
+#     la misma cara, de corridas distintas (otro repaso).
+# Cara que la gente veria dos veces. Ver sin_pisar.
+MISMA_CARA = 0.5
+
 
 def guardar_todas(nuevas):
     """Suma al cache de todas las caras. Igual que guardar_caras, con recuadro.
@@ -224,19 +243,58 @@ def sin_pisar(cli, filas, cuenta):
     la cara que el reconocedor habia elegido. Tampoco se propone a quien ya
     esta identificado en la foto: ponerle recuadro es trabajo de
     recuadros_faltantes.py, que esta validado para eso.
+
+    Tampoco se propone a nadie sobre una cara que ya tiene recuadro de otra
+    persona (MISMA_CARA): confirmada, es una cara con nombre; sin contestar, es
+    una pregunta que ya esta hecha. Repasar un album con otra galeria o con
+    otro piso proponia a otro sobre la misma cara y la gente la veia dos veces.
+    Lo que ya esta no se toca: si la sugerencia vieja era mala, la contesta una
+    persona.
     """
     if not filas:
         return filas
     ids = sorted({f["photo_id"] for f in filas})
     ya = set()
+    cajas = {}          # foto -> [(persona, bx, by, bw, bh)]
+    confirmadas = set()
     for i in range(0, len(ids), 100):
         lote = "in.(%s)" % ",".join(ids[i:i + 100])
-        for tabla in ("face_suggestions", "photo_people"):
-            for r in cli.select(tabla, select="photo_id,person_id", photo_id=lote):
-                ya.add((r["photo_id"], int(r["person_id"])))
-    quedan = [f for f in filas if (f["photo_id"], int(f["person_id"])) not in ya]
-    cuenta["ya_estaban"] += len(filas) - len(quedan)
+        for r in cli.select("face_suggestions", select="photo_id,person_id,bx,by,bw,bh",
+                            photo_id=lote):
+            ya.add((r["photo_id"], int(r["person_id"])))
+            if r.get("bx") is not None and r.get("bw"):
+                cajas.setdefault(r["photo_id"], []).append(
+                    (int(r["person_id"]), float(r["bx"]), float(r["by"]),
+                     float(r["bw"]), float(r["bh"])))
+        for r in cli.select("photo_people", select="photo_id,person_id", photo_id=lote):
+            ya.add((r["photo_id"], int(r["person_id"])))
+            confirmadas.add((r["photo_id"], int(r["person_id"])))
+    quedan = []
+    for f in filas:
+        if (f["photo_id"], int(f["person_id"])) in ya:
+            cuenta["ya_estaban"] += 1
+            continue
+        otra = cara_ocupada(f, cajas.get(f["photo_id"], ()))
+        if otra is not None:
+            if (f["photo_id"], otra) in confirmadas:
+                cuenta["cara_con_nombre"] += 1
+            else:
+                cuenta["cara_preguntada"] += 1
+            continue
+        quedan.append(f)
     return quedan
+
+
+def cara_ocupada(f, cajas):
+    """La persona que ya tiene un recuadro sobre la cara de f, o None."""
+    cx, cy = f["bx"] + f["bw"] / 2, f["by"] + f["bh"] / 2
+    for p, bx, by, bw, bh in cajas:
+        if p == int(f["person_id"]):
+            continue
+        if (abs(cx - (bx + bw / 2)) < MISMA_CARA * min(f["bw"], bw)
+                and abs(cy - (by + bh / 2)) < MISMA_CARA * min(f["bh"], bh)):
+            return p
+    return None
 
 
 def anotar_revisadas(cli, fol, conteo, por_carpeta, medidas, fallidas):
@@ -605,6 +663,7 @@ def main():
             x, y, w, hh = [float(v) for v in cara[:4]]
             filas.append({"photo_id": pid, "person_id": p,
                           "score": round(float(s[k]), 4), "rank": len(filas) + 1,
+                          "origen": ORIGEN,
                           "bx": round(x / ancho, 4), "by": round(y / alto, 4),
                           "bw": round(w / ancho, 4), "bh": round(hh / alto, 4)})
             with lock:
@@ -703,6 +762,10 @@ def main():
               % (len(quedan), len(acumulado)))
     if cuenta["ya_estaban"]:
         print("Propuestas que ya existian y no se pisaron: %d" % cuenta["ya_estaban"])
+    if cuenta["cara_con_nombre"] or cuenta["cara_preguntada"]:
+        print("No propuestas sobre una cara que ya tiene a otro: %d con nombre "
+              "confirmado, %d con pregunta sin contestar"
+              % (cuenta["cara_con_nombre"], cuenta["cara_preguntada"]))
     if cuenta["poco_conocida"]:
         print("Descartadas por parecido bajo sobre una ficha con menos de %d caras: %d"
               % (MIN_CARAS, cuenta["poco_conocida"]))

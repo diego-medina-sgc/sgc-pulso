@@ -85,6 +85,9 @@ CLAVES = {
     "carnets_medidos":       ("photo_id", "person_id"),
     "caras_dudosas_vistas":  ("person_id",),
     "caras_fuente_mala":     ("person_id", "fuente"),
+    # caras_repasar.py --todo la lee entera (8.000+ filas, 16/10/2026): por
+    # desplazamiento una carpeta salteada no se repasaba nunca
+    "carpetas_caras_revisadas": ("folder_id",),
     "corridas":              ("id",),
     "enrollments":           ("id",),
     "face_group_meta":       ("grupo",),
