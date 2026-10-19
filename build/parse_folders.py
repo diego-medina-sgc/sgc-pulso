@@ -300,12 +300,23 @@ TRIPS = {"cordoba": "Córdoba", "tandil": "Tandil", "angostura": "Villa La Angos
          "africa": "Sudáfrica", "new zealand": "Nueva Zelanda", "nz": "Nueva Zelanda",
          "bariloche": "Bariloche", "mendoza": "Mendoza", "iguazu": "Iguazú"}
 
+# Palabras de Retratos que alcanzan solas aunque el título diga otro tipo.
+RETRATOS_FUERTES = ("mugshot", "mugshots", "mug shots", "portrait", "portraits",
+                    "retratos", "fotos carnet", r"(?<!deporte )individual",
+                    r"(?<!deportes )individuales")
+
 RE_VS = re.compile(r"\bvs\.?\s+([a-z' ]{3,30})")
 
 
 def parse_event(t):
     types = [name for name, words in EVENT_RULES
              if (es_ex_alumnos(t) if words is None else has(t, *words))]
+    # "fotos alumnos" sola es la manera de Quilmes de decir individuales, pero
+    # si el título también dice de qué es ("Videos y Fotos alumnos Music"), es
+    # un álbum de eso y no una carpeta de carnets (19/10/2026).
+    if ("Retratos" in types and len(types) > 1
+            and not has(t, *RETRATOS_FUERTES)):
+        types.remove("Retratos")
     # el interhouse que no dice de qué es una jornada deportiva (classify.py)
     if "Deporte" not in types and interhouse_sin_tema(t):
         types.append("Deporte")
