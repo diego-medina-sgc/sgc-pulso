@@ -230,6 +230,15 @@ PASOS = [
     paso("padronunico",    ["padron_unico.py", "--aplicar"],
          ["drive:1wlAT6t-0f7m7ZvxbC4k_zT4etCH_Pl8HRYIU-_U7hDU"],
          quieto=False, cada_h=1),
+    # El nombre escrito en el archivo del carnet ("Persona AK 1.jpg") identifica
+    # a la persona sin que nadie lo corra a mano: cuando se renombra un archivo
+    # en Drive o entra alguien nuevo al padron, la firma cambia y corre en la
+    # misma vuelta (20/10/2026: un carnet renombrado el 19/10 seguia sin dueno
+    # porque este script solo se corria desde la notebook). Va despues del
+    # padron, para que la ficha nueva ya exista, y antes de huellas y
+    # referencias, para que su cara cuente en la misma vuelta.
+    paso("nombres",        ["retratos_nombres.py", "--aplicar"], ["db:retratos_nombres"],
+         quieto=False, cada_h=0),
     paso("grupales",       ["retratos_grupales.py", "--aplicar"], ["db:retratos"]),
     paso("huellas",        ["faces_huellas.py"], ["db:retratos"]),
     # Los albumes de evento que no pasaron enteros por el detector: sin esto

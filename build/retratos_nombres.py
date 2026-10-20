@@ -11,11 +11,11 @@ Buena parte de los retratos de Quilmes traen el nombre en el propio archivo y
 nadie lo habia leido: quedaron en la cola del juego para que alguien los mire
 uno por uno, cuando la respuesta estaba en el nombre del archivo.
 
-    MDF_4445.jpg Persona AM.jpg          467 fotos de 2023
-    ALVAREZ DE OLIVERA Persona AN.jpg     73 fotos de 2024
-    Persona AO Sebastian.jpg              70 fotos de 2023
-    Persona AP.jpg                  66 fotos de 2025
-    Persona AQ.jpg                   54 fotos de 2026
+    MDF_4445.jpg Persona AN.jpg          467 fotos de 2023
+    ALVAREZ DE OLIVERA Persona AO.jpg     73 fotos de 2024
+    Persona AP Sebastian.jpg              70 fotos de 2023
+    Persona AQ.jpg                  66 fotos de 2025
+    Persona AR.jpg                   54 fotos de 2026
     MDF_6792Aguilera.jpg                   142 fotos de 2022, solo el apellido
 
 Son cinco convenciones distintas y ninguna dice cual es el nombre y cual el
@@ -23,7 +23,7 @@ apellido. Da igual: no hace falta adivinarlo.
 
 EL PADRON DESAMBIGUA
 
-"Persona AM" puede ser Persona AR o Persona AM. En vez de decidirlo con
+"Persona AN" puede ser Persona AS o Persona AN. En vez de decidirlo con
 una regla por año -que es lo fragil, porque el año que viene cambia- se
 prueban todas las permutaciones contra las 4.652 personas del padron y se
 acepta la que existe. Si existe una sola, es esa. Si existen dos, no se toca.
@@ -77,7 +77,7 @@ def clave(s):
 
 
 def separar_camello(t):
-    """'RuizDiasParquet' -> 'Persona AS'.
+    """'RuizDiasParquet' -> 'Persona AT'.
 
     Solo si no hay ningun espacio: con espacios, el archivo ya viene separado
     y meterse a cortar por mayusculas rompe los 'De la Fuente'.
@@ -131,12 +131,12 @@ def indexar(padron):
 def por_subconjunto(pal, por_token, juegos):
     """Personas cuyo nombre es el del archivo con un apellido de mas o de menos.
 
-    El archivo dice "Persona AT" y el padron "Persona AT
+    El archivo dice "Persona AU" y el padron "Persona AU
     Rossi", o al reves. Se pide que uno contenga al otro y que compartan al
-    menos dos palabras: con una sola, "Persona AU" entraria en cualquier Juan.
+    menos dos palabras: con una sola, "Persona AV" entraria en cualquier Juan.
 
-    No se mira el orden, que es justo lo que no se sabe: "Persona AM" y
-    "Persona AR" son el mismo juego de palabras.
+    No se mira el orden, que es justo lo que no se sabe: "Persona AN" y
+    "Persona AS" son el mismo juego de palabras.
     """
     s = frozenset(pal)
     if len(s) < 2:
@@ -153,7 +153,7 @@ def por_subconjunto(pal, por_token, juegos):
 
 
 def titulo(s):
-    """'Persona AV' -> 'Persona AV'."""
+    """'Persona AW' -> 'Persona AW'."""
     return " ".join(p if (len(p) > 1 and p[1:].islower()) else p.capitalize()
                     for p in (s or "").split())
 
@@ -252,7 +252,7 @@ def main():
     # ignorar a la mitad del padron a la hora de buscarlo.
     #
     # Lo levanto Diego mirando una carpeta de ex staff donde cada archivo se
-    # llama "Persona AW.JPG": "por lo menos tendrian que venir ya
+    # llama "Persona AX.JPG": "por lo menos tendrian que venir ya
     # confirmados". Hoy no hay ninguna foto de staff esperando por esto -se
     # midio: 12 retratos sin dueno con nombre de persona en el archivo, los 12
     # de alumnos- pero la carpeta que esta cargando es justamente de staff, asi
@@ -283,8 +283,8 @@ def main():
             motivos["el archivo no trae nombre"] += 1
             continue
 
-        # Cualquier orden: el juego de palabras no distingue "Persona AM"
-        # de "Persona AR", que es justo lo que no hace falta decidir.
+        # Cualquier orden: el juego de palabras no distingue "Persona AN"
+        # de "Persona AS", que es justo lo que no hace falta decidir.
         cand = list(por_palabras.get(frozenset(pal), []))
         como = "nombre completo"
         if not cand:
@@ -330,14 +330,14 @@ def main():
             # El nombre existe pero ninguno de esos pudo estar en la foto.
             #
             # En un colegio con historia el mismo nombre se repite entre padres
-            # e hijos: hay un Persona AX que se fue en 2003 y otro que
+            # e hijos: hay un Persona AY que se fue en 2003 y otro que
             # cursa en 2025. No es la misma ficha escrita de dos maneras, es
             # otra persona, asi que se da de alta en vez de descartar.
             #
             # No se dan de alta solos, y no por prudencia sino porque no se
             # puede: people tiene el nombre normalizado como clave unica, asi
             # que el alta pisaria la ficha del egresado en vez de crear otra.
-            # Y algunos son dudosos de verdad: "Persona AY Arminio"
+            # Y algunos son dudosos de verdad: "Persona AZ Arminio"
             # figura hasta 2020 y la foto es de 2025, que tanto puede ser la
             # hija como la planilla mal cargada. Se listan para mirar.
             if de_la_sede and anio and len(pal) >= 2:

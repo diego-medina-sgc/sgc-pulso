@@ -8,9 +8,9 @@ Las fotos de varias personas que están en la cola de retratos.
 POR QUE
 
 Diego lo vio jugando: el juego le mostró una foto de tres mujeres y le preguntó
-"¿Quién es?", proponiendo a Persona AK. Su comentario fue exacto: "esta
+"¿Quién es?", proponiendo a Persona AL. Su comentario fue exacto: "esta
 foto hay 3 personas, no tiene sentido reconocer una si hay 3". Y de paso las
-nombró a las tres -Persona AL, Persona F y Persona AK- que
+nombró a las tres -Persona AM, Persona F y Persona AL- que
 ya quedaron puestas.
 
 El juego pregunta "de quién es este retrato" y eso sólo tiene sentido si hay

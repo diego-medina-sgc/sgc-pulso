@@ -23,12 +23,12 @@ hijo o el padre. Los Valete les dan esa primera cara.
 
 CADA CAMADA ESCRIBE DISTINTO
 
-    Persona BA.jpg                     APELLIDO, Nombre
-    ALVAREZ DE OLIVERA Persona AN.jpg      igual, sin espacio
-    Persona BB.jpg                     nombre.apellido
-    Persona BC 329.JPG               con el numero de la toma
+    Persona BB.jpg                     APELLIDO, Nombre
+    ALVAREZ DE OLIVERA Persona AO.jpg      igual, sin espacio
+    Persona BC.jpg                     nombre.apellido
+    Persona BD 329.JPG               con el numero de la toma
     Agosti JazminENB_1015 - copia.JPG        con el codigo de camara pegado
-    Persona BD Uniform ES 6 Lockwood.JPG  con el uniforme y la casa
+    Persona BE Uniform ES 6 Lockwood.JPG  con el uniforme y la casa
     S6-A0014 FINAL.jpg                       solo codigo, se descarta
 
 Igual que en los retratos, el orden no se decide con una regla: se prueban las
@@ -117,7 +117,7 @@ def cohorte_de(ruta):
 # El grado, escrito de todas las formas que usa el colegio.
 #
 # Iba adentro de RUIDO como "un numero al final", y eso dejaba la letra
-# colgada: "Persona BE Y1" quedaba "Persona BE Y". Aparte
+# colgada: "Persona BF Y1" quedaba "Persona BF Y". Aparte
 # porque la letra y el numero son una sola cosa y hay que sacar las dos.
 GRADO = re.compile(
     r"\b(y|ep|es|k|s|c|p)\s?[1-6][a-z]?\b|\bprek\b|\byear\s?[1-6]\b"
@@ -126,8 +126,8 @@ GRADO = re.compile(
 
 # La casa, cuando viene detras de un punto.
 #
-# Lo vio Diego en la lista de candidatos del juego: "Persona BF Kim",
-# "Persona BG Guest", "Persona BH Skrypnyk". Son veintidos chicos de
+# Lo vio Diego en la lista de candidatos del juego: "Persona BG Kim",
+# "Persona BH Guest", "Persona BI Skrypnyk". Son veintidos chicos de
 # una misma carpeta con la casa metida adentro del apellido.
 #
 # La convencion del archivo es "Apellido, Nombre. Casa - Grado", y hasta ahora
@@ -137,7 +137,7 @@ GRADO = re.compile(
 # No se puede sacar por lista a secas: Jackson, Roberts, Stevenson, Agar y
 # Haxell son casas del colegio Y apellidos de verdad, y borrarlos a ciegas
 # arruina a un Jackson real. Lo que las separa es el punto: un apellido se
-# escribe "Persona BI" o "Persona BH", nunca detras de un punto. La
+# escribe "Persona BJ" o "Persona BI", nunca detras de un punto. La
 # casa, en esta convencion, siempre.
 CASA_TRAS_PUNTO = re.compile(
     r"\.\s*(agar|cutts|farran|haxell|jackson|lockwood|roberts|stevenson"
@@ -151,13 +151,13 @@ def nombre_de(archivo, contexto=""):
 
     Lo explico Diego mirando un archivo que yo habia leido mal:
 
-        Persona BJ. Jackson - EP 1      Apellido, Nombre. Casa - Grado
-        Persona BE Y1                Nombre Apellido Grado
-        Persona BA                      APELLIDO, Nombre
-        Persona BB                      nombre.apellido
+        Persona BK. Jackson - EP 1      Apellido, Nombre. Casa - Grado
+        Persona BF Y1                Nombre Apellido Grado
+        Persona BB                      APELLIDO, Nombre
+        Persona BC                      nombre.apellido
 
     El archivo esta bien escrito; el que no entendia era este lector. De
-    "Persona BJ. Jackson - EP 1" sacaba "Persona BH Skrypnyk" y
+    "Persona BK. Jackson - EP 1" sacaba "Persona BI Skrypnyk" y
     creaba una ficha con la casa adentro del nombre.
 
     EL CONTEXTO ES EL NOMBRE DE LA CARPETA
@@ -171,12 +171,12 @@ def nombre_de(archivo, contexto=""):
     """
     base = archivo or ""
     # la extension puede venir dos veces y con un espacio en el medio:
-    # "Persona BK. Jpg.jpg". Se saca hasta que no quede ninguna.
+    # "Persona BL. Jpg.jpg". Se saca hasta que no quede ninguna.
     for _ in range(3):
         base = re.sub(r"[\s.]*\.?(jpe?g|png|tiff?|heic)\s*$", "", base, flags=re.I)
     base = re.sub(r"\b(jpe?g|png)\b", " ", base, flags=re.I)
     base = re.sub(r"\s*(final|copia|copy|editada?)\s*$", "", base, flags=re.I)
-    # "Copy of 002 Persona BL": lo que puso el que duplico la
+    # "Copy of 002 Persona BM": lo que puso el que duplico la
     # carpeta, mas el numero de orden de la sesion. Ninguno de los dos es el
     # nombre, y el nombre esta completo detras.
     base = re.sub(r"^\s*cop(y\s+of|ia\s+de)\s*\d*\s*", "", base, flags=re.I)
@@ -188,13 +188,13 @@ def nombre_de(archivo, contexto=""):
     for palabra in re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,}", contexto or ""):
         base = re.sub(r"\b%s\b" % re.escape(palabra), " ", base, flags=re.I)
     # En las fotos de staff el archivo suele traer el puesto detras de un
-    # guion: "Persona BM - Teaching Assistant", "Persona Z2
+    # guion: "Persona BN - Teaching Assistant", "Persona Z2
     # - K2G Teacher", "Barbara - Yoga". El nombre de una persona no lleva un
     # guion con espacios, asi que lo que sigue no es nombre.
     base = re.split(r"\s+-\s+", base)[0]
     if CAMARA.match(base.strip()):
         return None
-    # "Persona BB" -> "Persona BB". Solo cuando los puntos separan
+    # "Persona BC" -> "Persona BC". Solo cuando los puntos separan
     # palabras y no queda ninguna otra separacion.
     if "." in base and " " not in base.replace(",", ""):
         base = base.replace(".", " ")
@@ -211,7 +211,7 @@ def nombre_de(archivo, contexto=""):
 # "persona@ejemplo.org.JPG". Es la mejor clave que puede traer una
 # foto -el padron tiene el mail de casi todo el staff y no hay dos personas con
 # el mismo- pero hay que leerla antes de limpiar el nombre: nombre_de() la
-# convierte en "Persona BN@stgeorges edu ar" y ahi ya no sirve para nada.
+# convierte en "Persona BO@stgeorges edu ar" y ahi ya no sirve para nada.
 MAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 
@@ -267,10 +267,10 @@ def indexar_padron(cli):
         "people", select="id,display_name,campus,first_seen,last_seen,kind,email")
         if p.get("kind") != "noise"]
     pw, pa, pt, ju = indexar(padron)
-    # "nina.dipietro" da "nina dipietro" y el padron dice "Persona BO":
+    # "nina.dipietro" da "nina dipietro" y el padron dice "Persona BP":
     # ningun juego de palabras coincide. Comparando sin espacios si.
     # La camada 2022 de North pega los dos apellidos: "RamirezIribarren
-    # Valeria" contra "Persona BP" del padron. No coincide
+    # Valeria" contra "Persona BQ" del padron. No coincide
     # ningun juego de palabras ni sacando los espacios, porque el orden cambia.
     #
     # Lo que si coincide es cortar el nombre del padron en dos y pegar cada
@@ -306,13 +306,13 @@ def confiable(pal, txt):
     ensucia para siempre la lista de candidatos del juego.
 
     Yo cargue asi 214 fichas con el grado o la casa adentro del nombre
-    ("Persona Z3", "Persona BH Skrypnyk"), y aparecieron
+    ("Persona Z3", "Persona BI Skrypnyk"), y aparecieron
     recien cuando la aprobacion automatica quiso escribirlas sobre una foto.
     """
     if len(pal) < 2:
         return False
     # "de" esta en BASURA porque suelto no es un nombre, pero adentro de uno
-    # si: "Persona BQ", "Persona BR", "Persona BS".
+    # si: "Persona BR", "Persona BS", "Persona BT".
     # Se mira si lo que queda sacando las particulas es basura, no si la toca.
     PARTICULAS = {"de", "del", "la", "las", "los", "y", "da", "di", "van", "von"}
     propias = [w for w in pal if w not in PARTICULAS]
@@ -324,12 +324,12 @@ def confiable(pal, txt):
         return False
     # Una palabra de una sola letra puede ser dos cosas distintas.
     #
-    # En el medio es una inicial y es parte del nombre: "Persona BT",
-    # "Persona BU". Al final es lo que deja un grado a medio sacar
-    # -"Buktenica Y"- o un apellido escrito en inicial -"Persona BV"-, y en los
+    # En el medio es una inicial y es parte del nombre: "Persona BU",
+    # "Persona BV". Al final es lo que deja un grado a medio sacar
+    # -"Buktenica Y"- o un apellido escrito en inicial -"Persona BW"-, y en los
     # dos casos no alcanza para crear una ficha.
     # Solo la ULTIMA. Una inicial adelante es corriente en castellano -"M
-    # Persona BW", "M Persona BX", "Persona BY"- y una al
+    # Persona BX", "M Persona BY", "Persona BZ"- y una al
     # final no: ahi es un grado a medio sacar o un apellido escrito en inicial.
     if len(pal[-1]) < 2:
         return False
@@ -338,11 +338,11 @@ def confiable(pal, txt):
         return False
     # El epigrafe de una obra, no una persona. Salieron de las carpetas de
     # muestras de arte, donde el archivo se llama como el cuadro:
-    # "acuarela Y lapiz sobre papel Martina Machia", ". Persona BZ Fatch.
+    # "acuarela Y lapiz sobre papel Martina Machia", ". Persona CA Fatch.
     # Obra de titeres El tesoro pirata".
     #
     # El largo se puede usar de corte porque el padron dice donde esta el
-    # techo: de 6.128 fichas, la mas larga tiene seis palabras -"Persona CA
+    # techo: de 6.128 fichas, la mas larga tiene seis palabras -"Persona CB
     # Diaz Valdez Vaz Pinto"- y son cinco fichas. Ninguna tiene siete.
     if len(pal) > 6:
         return False
