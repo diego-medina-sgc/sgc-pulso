@@ -14,6 +14,10 @@ fila por foto (sql/caras_mapa.sql).
 
 Corre en el pulso despues de "grupos": lo que no quedo en un grupo es lo que
 va aca. Reescribe la tabla entera (TRUNCATE y carga), asi no se infla.
+
+Desde el 21/10/2026 sube tambien los recuadros chicos (40-59 px, sin huella)
+de _caras_chicas.npz a caras_mapa.chicas: se ven y se pueden nombrar, pero no
+son referencia (faces.LADO_RECUADRO).
 """
 import argparse
 import os
@@ -33,6 +37,35 @@ import sb  # noqa: E402
 # (renglon base_mb). 300 MB es el doble del peor caso medido el 15/10/2026
 # con el piso mas bajo, sobre 8 GB de Supabase Pro.
 TOPE_MB = 300
+
+
+def columna_chicas(cli):
+    """Si caras_mapa ya tiene la columna chicas. Avisa una vez si no."""
+    try:
+        cli.select("caras_mapa", select="photo_id,chicas", limit="1")
+        return True
+    except Exception as e:
+        print("  (caras_mapa no tiene la columna chicas todavia: %s; los recuadros "
+              "chicos no se suben)" % str(e)[:120], flush=True)
+        return False
+
+
+def leer_chicas():
+    """{photo_id: [bx, by, bw, bh, ...]} de faces.CACHE_CHICAS. Vacio si no esta."""
+    ruta = faces.npz(faces.CACHE_CHICAS)
+    out = defaultdict(list)
+    if not os.path.exists(ruta):
+        print("  (no hay %s todavia: el detector no corrio con el piso del "
+              "recuadro)" % os.path.basename(ruta), flush=True)
+        return out
+    with np.load(ruta, allow_pickle=True) as z:
+        F = z["photo_ids"].astype(str)
+        C = z["cajas"].astype(np.float32)
+    for i in range(len(F)):
+        bx, by, bw, bh = (round(float(x), 4) for x in C[i])
+        if bw > 0 and bh > 0:
+            out[F[i]].extend([bx, by, bw, bh])
+    return out
 
 
 def main():
@@ -62,17 +95,33 @@ def main():
         por_foto[F[i]].extend([bx, by, bw, bh])
         sueltas += 1
 
-    filas = [{"photo_id": f, "cajas": c} for f, c in por_foto.items()]
+    # Los recuadros chicos (faces.LADO_RECUADRO a LADO_EVENTOS-1 px, sin
+    # huella; 21/10/2026) van a la columna chicas, con el mismo formato. Una
+    # foto que solo tiene chicas lleva cajas vacio. Si la columna no existe
+    # todavia (pedido a base), se avisa y se escribe como antes.
+    con_chicas = columna_chicas(cli)
+    chicas_de = leer_chicas() if con_chicas else {}
+    claves = set(por_foto) | set(chicas_de)
+    if con_chicas:
+        filas = [{"photo_id": f, "cajas": por_foto.get(f, []), "chicas": chicas_de.get(f, [])}
+                 for f in sorted(claves)]
+    else:
+        filas = [{"photo_id": f, "cajas": c} for f, c in sorted(por_foto.items())]
     # caras_mapa no tiene clave foranea a photos, asi que nada frena las caras
     # de fotos borradas en Drive: el 13/10/2026 habia 2.307 filas sin foto. Se
     # dejan afuera aca, tambien en el ensayo para contarlas.
     filas = cli.solo_fotos_vivas(filas, "caras_mapa")
-    por_foto = {f["photo_id"]: f["cajas"] for f in filas}
-    sueltas = sum(len(c) // 4 for c in por_foto.values())
+    sueltas = sum(len(f["cajas"]) // 4 for f in filas)
+    n_chicas = sum(len(f.get("chicas") or []) // 4 for f in filas)
+    solo_chicas = sum(1 for f in filas if not f["cajas"])
     # fila: ~24 de cabecera + id de 33 + arreglo (24 + 4 por numero); indice ~45 por fila
-    bytes_tabla = sum(24 + 34 + 24 + 4 * len(c) for c in por_foto.values())
+    bytes_tabla = sum(24 + 34 + 24 + 4 * len(f["cajas"])
+                      + (24 + 4 * len(f["chicas"]) if "chicas" in f else 0) for f in filas)
     mb = (bytes_tabla + 45 * len(filas)) / 1048576
     print("  caras detectadas: %d   sin grupo: %d   en %d fotos" % (len(F), sueltas, len(filas)))
+    if con_chicas:
+        print("  recuadros chicos (%d-%d px, sin huella): %d   fotos que solo tienen chicos: %d"
+              % (faces.LADO_RECUADRO, faces.LADO_EVENTOS - 1, n_chicas, solo_chicas))
     print("  ocuparia ~%.1f MB (tope %d MB)" % (mb, TOPE_MB))
 
     if mb > TOPE_MB:

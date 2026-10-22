@@ -103,6 +103,16 @@ def cara_de(c, data, caja, hecho, lock):
     img = c.leer(data)
     if img is None:
         return None
+    alto, ancho = img.shape[:2]
+    # UN RECUADRO CHICO NO ES REFERENCIA (21/10/2026, decision de Diego). Las
+    # caras de 40 a 59 px tienen recuadro y se pueden nombrar, pero no huella:
+    # se mira el recuadro guardado sobre esta misma miniatura de 1600, antes de
+    # detectar. Sin esto, si la foto tiene una sola cara de 44 px o mas, se
+    # archivaba ESA (la de otro) como cara de quien nombraron en la chica.
+    if caja is not None and faces.caja_chica(caja, ancho, alto):
+        with lock:
+            hecho["recuadro_chico"] += 1
+        return None
     caras = c.detectar(img)
     if not caras:
         return None
@@ -112,7 +122,6 @@ def cara_de(c, data, caja, hecho, lock):
         with lock:
             hecho["varias_sin_caja"] += 1
         return None
-    alto, ancho = img.shape[:2]
     objetivo = (caja[0] * ancho, caja[1] * alto, caja[2] * ancho, caja[3] * alto)
     mejor, cuanto = None, 0.0
     for cara in caras:
@@ -270,6 +279,19 @@ def main():
             or int(f[1]) not in con_humana]
     if antes != len(pend):
         print("Carnets salteados porque su persona ya tiene caras humanas: %d" % (antes - len(pend)))
+    # Las nombradas sobre un recuadro chico (faces.CACHE_CHICAS) no se bajan:
+    # no van a ser referencia (ver cara_de). Sin esto se bajarian en cada
+    # corrida para volver a descartarlas.
+    chicas = faces.cajas_chicas({f[0] for f in pend})
+    if chicas:
+        def es_chica(f):
+            cj = cajas.get((f[0], int(f[1])))
+            return cj is not None and (f[0], round(cj[0], 4), round(cj[1], 4)) in chicas
+        antes = len(pend)
+        pend = [f for f in pend if not es_chica(f)]
+        if antes != len(pend):
+            print("Nombradas sobre un recuadro chico (%d-%d px), no son referencia: %d"
+                  % (faces.LADO_RECUADRO, faces.LADO_EVENTOS - 1, antes - len(pend)))
     print("A procesar ahora: %d" % len(pend))
     if a.ensayo:
         # lo que quedaria guardado sin las nuevas: no baja nada ni escribe
@@ -308,7 +330,7 @@ def main():
     d = Drive(SA_PATH)
     lock = threading.Lock()
     hecho = {"n": 0, "sin_cara": 0, "error": 0, "de_cache": 0,
-             "varias_sin_caja": 0, "caja_sin_cara": 0}
+             "varias_sin_caja": 0, "caja_sin_cara": 0, "recuadro_chico": 0}
 
     # Los modelos de OpenCV NO son thread-safe: compartir un detector entre
     # hilos corrompe su estado y tira "buf.shape() == m.shape()". Cada hilo
@@ -416,6 +438,9 @@ def main():
     print("Descartadas por no poder saber cual es la cara: %d sin recuadro, "
           "%d con recuadro que no coincide"
           % (hecho["varias_sin_caja"], hecho["caja_sin_cara"]))
+    if hecho["recuadro_chico"]:
+        print("Descartadas por recuadro chico (menos de %d px, sin huella): %d"
+              % (faces.LADO_EVENTOS, hecho["recuadro_chico"]))
     print("Escrito: %s  (%.1f MB)" % (DEST, os.path.getsize(DEST) / 1e6))
 
 

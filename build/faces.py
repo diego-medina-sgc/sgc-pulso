@@ -429,6 +429,78 @@ LADO_MIN = 44
 # px): no alcanza para bajar mas. Muestra de 3.131 fotos del archivo: con 60 px
 # se guardan 1,46 veces las caras de hoy (1,41-1,50).
 LADO_EVENTOS = 60
+# El piso del RECUADRO (21/10/2026, decision de Diego): las caras de
+# LADO_RECUADRO a LADO_EVENTOS-1 px, medidas igual que LADO_EVENTOS (lado menor
+# de la caja de YuNet sobre la miniatura de 1600), llevan recuadro en el visor y
+# se pueden nombrar, pero NO tienen huella: no van a _caras_todas, ni a grupos,
+# ni a sugerencias, ni son referencia. Van a CACHE_CHICAS y de ahi a
+# caras_mapa.chicas (caras_mapa.py).
+#
+# Medido el 21/10/2026, deteccion a 800 como hoy:
+#   asado de camada 2004 (31 fotos):   >=60: 44 caras   40-59: 106   <40: 169
+#   muestra de 299 fotos del archivo:  por foto >=60: 1,90  40-59: 1,01  <40: 1,85;
+#                                      el 28 % de las fotos gana al menos una
+#   falsos positivos contados a ojo (120 recortes por tramo): 3-5 % en 40-59
+# Y la huella a ese tamaño, achicando 247 caras confirmadas por una persona (con
+# referencia propia fuera de su sesion) hasta que midan N px y comparando
+# contra 46.208 referencias: a 0,60 acierto/error 68,8 %/0,6 % a 60 px,
+# 66,0 %/0,6 % a 50 y 64,4 %/0,6 % a 40. Es el mejor caso (achicar no
+# desenfoca): por eso esta tanda no les da huella.
+LADO_RECUADRO = 40
+# Donde quedan los recuadros chicos: photo_ids, cajas (fracciones, 4 decimales,
+# como _caras_todas) y lados (px en la miniatura de 1600). Sin huella.
+CACHE_CHICAS = "_caras_chicas.npz"
+
+
+def repartir(caras, piso_huella=None, piso_recuadro=None):
+    """(grandes, chicas) de una lista de caras de YuNet.
+
+    grandes: lado >= LADO_EVENTOS (huella, _caras_todas, grupos, sugerencias).
+    chicas:  LADO_RECUADRO <= lado < LADO_EVENTOS (solo recuadro).
+    Lo de abajo de LADO_RECUADRO se descarta."""
+    ph = LADO_EVENTOS if piso_huella is None else piso_huella
+    pr = LADO_RECUADRO if piso_recuadro is None else piso_recuadro
+    grandes, chicas = [], []
+    for c in caras:
+        lado = float(min(c[2], c[3]))
+        if lado >= ph:
+            grandes.append(c)
+        elif lado >= pr:
+            chicas.append(c)
+    return grandes, chicas
+
+
+def caja_chica(caja, ancho, alto):
+    """True si un recuadro guardado (fracciones bx, by, bw, bh) mide menos de
+    LADO_EVENTOS sobre una imagen de ancho x alto (la miniatura de 1600).
+
+    Un recuadro con 4 decimales sobre 1600 px se corre a lo sumo 0,08 px: se
+    da medio pixel de margen para que una cara de 60 justos no pase por chica."""
+    lado = min(float(caja[2]) * ancho, float(caja[3]) * alto)
+    return lado + 0.5 < LADO_EVENTOS
+
+
+def cajas_chicas(fotos=None):
+    """{(photo_id, bx, by)} de CACHE_CHICAS, redondeado a 4 como el resto.
+
+    Para los que ubican una cara confirmada por su recuadro: un recuadro chico
+    no tiene huella, y no hay que ir a buscarle una prestada. Si el archivo no
+    esta, conjunto vacio (todavia no corrio el detector con este piso)."""
+    ruta = npz(CACHE_CHICAS)
+    if not os.path.exists(ruta):
+        return set()
+    with np.load(ruta, allow_pickle=True) as z:
+        F = z["photo_ids"].astype(str)
+        C = z["cajas"].astype(np.float32)
+    if fotos is not None:
+        fotos = set(fotos)
+    out = set()
+    for i in range(len(F)):
+        if fotos is None or F[i] in fotos:
+            out.add((F[i], round(float(C[i][0]), 4), round(float(C[i][1]), 4)))
+    return out
+
+
 # A qué tamaño se detecta. YuNet fue entrenado a 320 px: sobre una foto de
 # 1920 deja de ver caras que encuentra sin problema al achicarla. 800 anda
 # bien tanto en retratos como en fotos de grupo.

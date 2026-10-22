@@ -40,6 +40,39 @@ TOPE_FOTOS = 6000      # por vuelta: ~0,25 s por foto, unos 25 minutos
 POR_LLAMADA = 150      # carpetas por llamada: la linea de comandos tiene tope
 
 
+def elegir_solo_fallidas(cli, pendientes):
+    """De las pendientes, las que ya estan anotadas enteras (fotos =
+    photo_count): vuelven solo por caras_fotos_fallidas.
+
+    Devuelve ({folder_id: fotos a reintentar}, todas las anotadas enteras).
+    Ninguna anotada entera se repasa entera: si no tiene fotos para
+    reintentar (la base y este script miran la misma regla, pero el reloj
+    corre entre los dos) o la tabla no se pudo leer, no se toca en esta
+    vuelta. Con la funcion de la base de hoy no aparece ninguna."""
+    ids = sorted(p["folder_id"] for p in pendientes)
+    anotadas = {}
+    for i in range(0, len(ids), 100):
+        for r in cli.select("carpetas_caras_revisadas", select="folder_id,fotos",
+                            folder_id="in.(%s)" % ",".join(ids[i:i + 100])):
+            anotadas[r["folder_id"]] = int(r["fotos"])
+    cand = [p["folder_id"] for p in pendientes
+            if anotadas.get(p["folder_id"]) == int(p["fotos"] or 0)]
+    if not cand:
+        return {}, set()
+    from faces_eventos import fallidas_abiertas, para_reintentar
+    abiertas = fallidas_abiertas(cli, cand)
+    if abiertas is None:
+        return {}, set(cand)
+    por_carpeta = defaultdict(int)
+    for pid in para_reintentar(abiertas):
+        por_carpeta[abiertas[pid]["folder_id"]] += 1
+    sin = [f for f in cand if not por_carpeta.get(f)]
+    if sin:
+        print("Anotadas enteras sin fotos fallidas para reintentar ahora: %d (no se tocan)"
+              % len(sin))
+    return {f: n for f, n in por_carpeta.items() if f in set(cand)}, set(cand)
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -54,19 +87,35 @@ def main():
     if not pendientes:
         return
 
+    # LAS QUE VUELVEN SOLO POR SUS FOTOS FALLIDAS (21/10/2026). Una carpeta ya
+    # anotada con fotos = photo_count solo puede estar pendiente porque tiene
+    # fotos en caras_fotos_fallidas para reintentar (carpetas_caras_pendientes,
+    # pedido a base). Esas no se repasan enteras: faces_eventos.py
+    # --solo-fallidas baja solo esas fotos, y lo que cuentan para el tope son
+    # ellas, no el album.
+    solo_fallidas, anotadas_enteras = elegir_solo_fallidas(cli, pendientes)
+    enteras = [p for p in pendientes if p["folder_id"] not in anotadas_enteras]
+
     # los mas chicos primero: con el tope, mas albumes arreglados por vuelta
-    elegidos, suma = [], 0
-    for p in sorted(pendientes, key=lambda p: (int(p["fotos"] or 0), p["folder_id"])):
-        if elegidos and suma + int(p["fotos"] or 0) > a.tope:
+    elegidos, suma = [], sum(solo_fallidas.values())
+    for p in sorted(enteras, key=lambda p: (int(p["fotos"] or 0), p["folder_id"])):
+        if (elegidos or solo_fallidas) and suma + int(p["fotos"] or 0) > a.tope:
             continue
         elegidos.append(p)
         suma += int(p["fotos"] or 0)
     por_anio = defaultdict(list)
     for p in elegidos:
         por_anio[int(p["year"])].append(p["folder_id"])
+    anio_de = {p["folder_id"]: int(p["year"]) for p in pendientes}
+    reintentos = defaultdict(list)
+    for fid in solo_fallidas:
+        reintentos[anio_de[fid]].append(fid)
     print("Esta vuelta: %d albumes, %d fotos, %d años" % (len(elegidos), suma, len(por_anio)))
     for anio in sorted(por_anio):
         print("  %d: %d albumes" % (anio, len(por_anio[anio])))
+    if solo_fallidas:
+        print("Solo por fotos fallidas: %d albumes, %d fotos a reintentar"
+              % (len(solo_fallidas), sum(solo_fallidas.values())))
 
     if not a.aplicar:
         print("\nEnsayo: no se corrio nada. Agregar --aplicar.")
@@ -74,14 +123,16 @@ def main():
 
     fallos = 0
     t0 = time.time()
-    for anio in sorted(por_anio):
-        ids = por_anio[anio]
+    tandas = [(anio, por_anio[anio], []) for anio in sorted(por_anio)]
+    tandas += [(anio, reintentos[anio], ["--solo-fallidas"]) for anio in sorted(reintentos)]
+    for anio, ids, extra in tandas:
         for i in range(0, len(ids), POR_LLAMADA):
             lote = ids[i:i + POR_LLAMADA]
-            print("\n=== %d: %d albumes ===" % (anio, len(lote)), flush=True)
+            print("\n=== %d: %d albumes%s ===" % (anio, len(lote),
+                                                 " (solo fallidas)" if extra else ""), flush=True)
             codigo = subprocess.run(
                 [sys.executable, "-u", os.path.join(HERE, "faces_eventos.py"),
-                 "--anio", str(anio), "--carpeta", ",".join(lote)],
+                 "--anio", str(anio), "--carpeta", ",".join(lote)] + extra,
                 cwd=HERE, env=dict(os.environ, PYTHONUTF8="1")).returncode
             if codigo != 0:
                 fallos += 1

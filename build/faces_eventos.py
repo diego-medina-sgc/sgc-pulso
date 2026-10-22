@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -166,6 +167,160 @@ ORIGEN = "eventos"
 #     la misma cara, de corridas distintas (otro repaso).
 # Cara que la gente veria dos veces. Ver sin_pisar.
 MISMA_CARA = 0.5
+
+# LOS RECUADROS CHICOS (21/10/2026). Las caras de faces.LADO_RECUADRO (40) a
+# LADO_MIN-1 (59) px tienen recuadro en el visor y se pueden nombrar, pero no
+# huella: no van a CACHE_TODAS ni se comparan con nadie. Van a CACHE_CHICAS, que
+# caras_mapa.py sube a caras_mapa.chicas. La medicion esta en faces.py.
+CACHE_CHICAS = faces.npz(faces.CACHE_CHICAS)
+
+# LAS FOTOS QUE FALLAN (21/10/2026). Una miniatura que no baja, una imagen que
+# no se lee o un detector que tira una excepcion se reintentan:
+#   - en la misma corrida, la bajada INTENTOS_BAJAR veces con espera creciente
+#     (un 429 o un corte de un segundo no son una foto rota);
+#   - entre corridas, por la tabla caras_fotos_fallidas (pedido a base, ver
+#     CONTRATO.md): cada falla suma un intento con su motivo, y
+#     carpetas_caras_pendientes() devuelve la carpeta otra vez mientras haya
+#     fallidas sin resolver con menos de INTENTOS_MAX intentos y mas de
+#     ESPERA_H horas desde el ultimo. caras_revisar.py la repasa con
+#     --solo-fallidas: solo esas fotos, no el album entero.
+# Cuando una foto que estaba ahi sale bien, resuelta_at = now(). Nada se borra.
+# Si la tabla no existe todavia, se avisa una vez y se sigue como antes.
+FALLIDAS = "caras_fotos_fallidas"
+INTENTOS_BAJAR = 3
+INTENTOS_MAX = 3
+ESPERA_H = 1
+_aviso_fallidas = []
+
+
+def _avisar_fallidas(que, e):
+    if not _aviso_fallidas:
+        print("  (no se pudo %s %s: %s; las fallidas no se anotan y se sigue como antes)"
+              % (que, FALLIDAS, str(e)[:160]), flush=True)
+    _aviso_fallidas.append(que)
+
+
+def motivo_corto(e):
+    """La excepcion en una linea corta, para caras_fotos_fallidas.motivo."""
+    if isinstance(e, str):
+        return e[:120]
+    if isinstance(e, urllib.error.HTTPError):
+        return "HTTP %s" % e.code
+    if isinstance(e, urllib.error.URLError):
+        return ("URLError: %s" % (e.reason,))[:120]
+    return ("%s: %s" % (type(e).__name__, e))[:120]
+
+
+def fallidas_abiertas(cli, carpetas):
+    """{photo_id: fila} de caras_fotos_fallidas sin resolver en esas carpetas.
+    None si la tabla no se pudo leer (no existe todavia)."""
+    out = {}
+    carpetas = sorted(set(carpetas))
+    try:
+        for i in range(0, len(carpetas), 40):
+            for r in cli.select(FALLIDAS, select="photo_id,folder_id,motivo,intentos,ultimo_at",
+                                folder_id="in.(%s)" % ",".join(carpetas[i:i + 40]),
+                                resuelta_at="is.null"):
+                out[r["photo_id"]] = r
+    except Exception as e:
+        _avisar_fallidas("leer", e)
+        return None
+    return out
+
+
+def para_reintentar(abiertas, ahora=None):
+    """Las fallidas abiertas que toca reintentar: menos de INTENTOS_MAX
+    intentos y mas de ESPERA_H horas desde el ultimo. El mismo criterio que
+    carpetas_caras_pendientes() (base)."""
+    import datetime as _dt
+    ahora = ahora or _dt.datetime.now(_dt.timezone.utc)
+    out = []
+    for pid, r in (abiertas or {}).items():
+        if int(r.get("intentos") or 0) >= INTENTOS_MAX:
+            continue
+        u = r.get("ultimo_at")
+        if u:
+            try:
+                t = _dt.datetime.fromisoformat(str(u).replace("Z", "+00:00"))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=_dt.timezone.utc)
+                if ahora - t < _dt.timedelta(hours=ESPERA_H):
+                    continue
+            except ValueError:
+                pass
+        out.append(pid)
+    return sorted(out)
+
+
+def filas_fallidas(fallaron, carpeta_de, abiertas, cuando):
+    """Las filas a escribir para las fotos que fallaron en esta corrida.
+
+    fallaron: {photo_id: motivo}. abiertas: lo que ya estaba sin resolver. Si
+    la foto ya estaba abierta suma un intento; si no (nueva, o resuelta antes y
+    que volvio a fallar), arranca en 1 y se reabre."""
+    filas = []
+    for pid, motivo in sorted(fallaron.items()):
+        previa = (abiertas or {}).get(pid)
+        filas.append({"photo_id": pid, "folder_id": carpeta_de.get(pid),
+                      "motivo": motivo_corto(motivo),
+                      "intentos": int(previa.get("intentos") or 0) + 1 if previa else 1,
+                      "ultimo_at": cuando, "resuelta_at": None})
+    return filas
+
+
+def registrar_fallidas(cli, fallaron, salieron, carpeta_de, abiertas):
+    """Anota las que fallaron y marca resueltas las abiertas que salieron bien.
+    Envuelto: anotar no puede voltear la corrida, y si falla se dice."""
+    if abiertas is None:
+        if fallaron:
+            print("Fotos que fallaron (sin tabla donde anotarlas): %d" % len(fallaron))
+        return
+    import datetime as _dt
+    cuando = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    filas = filas_fallidas(fallaron, carpeta_de, abiertas, cuando)
+    resueltas = sorted(set(salieron) & set(abiertas))
+    try:
+        if filas:
+            cli.upsert(FALLIDAS, filas, on_conflict="photo_id")
+        for i in range(0, len(resueltas), 100):
+            cli.update(FALLIDAS, {"resuelta_at": cuando},
+                       photo_id="in.(%s)" % ",".join(resueltas[i:i + 100]),
+                       resuelta_at="is.null")
+        print("Fotos fallidas anotadas: %d   resueltas ahora: %d"
+              % (len(filas), len(resueltas)))
+        for m, n in Counter(f["motivo"] for f in filas).most_common(5):
+            print("   %-60s %d" % (m, n))
+    except Exception as e:
+        _avisar_fallidas("escribir", e)
+
+
+def guardar_chicas(chicas, medidas):
+    """Reemplaza en CACHE_CHICAS los recuadros chicos de las fotos medidas.
+
+    chicas: [(photo_id, (bx, by, bw, bh), lado)]. medidas: las fotos que
+    pasaron enteras por el detector en esta corrida. De cada una se sacan las
+    chicas viejas y quedan las de ahora (cero, si ya no tiene): repasar una
+    carpeta no duplica nada, y una foto que no se pudo medir conserva lo que
+    tenia."""
+    import os as _os
+    medidas = set(medidas)
+    if not medidas:
+        return None
+    fotos = np.array([x[0] for x in chicas], dtype=object)
+    cajas = np.array([x[1] for x in chicas], dtype=np.float32).reshape(-1, 4)
+    lados = np.array([min(255, int(round(x[2]))) for x in chicas], dtype=np.uint8)
+    if _os.path.exists(CACHE_CHICAS):
+        with np.load(CACHE_CHICAS, allow_pickle=True) as z:
+            F, C, L = z["photo_ids"], z["cajas"], z["lados"]
+        keep = np.fromiter((str(f) not in medidas for f in F), dtype=bool, count=len(F))
+        fotos = np.concatenate([F[keep].astype(object), fotos])
+        cajas = np.concatenate([C[keep].astype(np.float32), cajas])
+        lados = np.concatenate([L[keep].astype(np.uint8), lados])
+    tmp = CACHE_CHICAS + ".tmp"
+    with open(tmp, "wb") as fh:
+        np.savez_compressed(fh, photo_ids=fotos.astype(str), cajas=cajas, lados=lados)
+    _os.replace(tmp, CACHE_CHICAS)
+    return len(fotos)
 
 
 def guardar_todas(nuevas):
@@ -446,7 +601,12 @@ def main():
                          "(o varias, separadas por coma)")
     ap.add_argument("--umbral", type=float, default=UMBRAL)
     ap.add_argument("--ensayo", action="store_true", help="medir sin escribir")
+    ap.add_argument("--solo-fallidas", action="store_true", dest="solo_fallidas",
+                    help="de las carpetas pedidas, solo las fotos de "
+                         "caras_fotos_fallidas que toca reintentar")
     a = ap.parse_args()
+    if a.solo_fallidas and not a.carpeta:
+        sys.exit("--solo-fallidas va con --carpeta.")
 
     cli = sb.SB()
     vecs, personas, anios_ref = todas_las_referencias(cli)
@@ -576,6 +736,17 @@ def main():
     fotos = sorted(carpeta_de)
     por_carpeta = Counter(carpeta_de.values())
     medidas, fallidas = Counter(), Counter()
+    # Las fotos de estas carpetas que ya habian fallado y siguen sin resolver
+    # (None: la tabla todavia no existe; se sigue como antes).
+    abiertas = fallidas_abiertas(cli, fol)
+    if a.solo_fallidas:
+        # Repaso de una carpeta ya revisada que volvio a la cola solo por sus
+        # fotos fallidas (caras_revisar.py): esas fotos y ninguna otra. El
+        # album no se vuelve a anotar (anotar_revisadas): ya estaba.
+        reintentar = set(para_reintentar(abiertas)) & set(fotos)
+        print("Fotos fallidas para reintentar: %d (abiertas en estas carpetas: %d)"
+              % (len(reintentar), len(abiertas or {})))
+        fotos = sorted(reintentar)
     if a.muestra:
         paso = max(len(fotos) // a.muestra, 1)
         fotos = fotos[::paso][:a.muestra]
@@ -591,6 +762,9 @@ def main():
     brecha = []
     huellas = []
     todas = []
+    chicas = []          # (foto, caja, lado) de 40 a 59 px: solo recuadro
+    fallaron = {}        # foto -> motivo, de esta corrida
+    salieron = set()     # fotos que pasaron enteras por el detector
 
     def mis_caras():
         if not hasattr(local, "c"):
@@ -598,38 +772,71 @@ def main():
             local.c_lado = None
         return local.c
 
+    def fallo(pid, motivo):
+        with lock:
+            cuenta["error"] += 1
+            fallidas[carpeta_de[pid]] += 1
+            fallaron[pid] = motivo_corto(motivo)
+        return []
+
+    def bajar(pid):
+        """Los bytes de la miniatura, o (None, motivo). Reintenta: un 429 o un
+        corte de un segundo no son una foto rota (ver FALLIDAS arriba)."""
+        motivo = None
+        for intento in range(INTENTOS_BAJAR):
+            if intento:
+                time.sleep(2.0 * 2 ** (intento - 1))
+            try:
+                link = d.get("files/" + pid, fields="thumbnailLink").get("thumbnailLink")
+                if not link:
+                    # Sin miniatura es una foto que no se pudo bajar, y se
+                    # cuenta como tal. Salia sin contarse: su album nunca
+                    # cerraba (anotar_revisadas) y el paso "caras" lo repasaba
+                    # cada hora (13/9/2026, 5 albumes de 1 a 41 fotos).
+                    motivo = "sin miniatura"
+                    continue
+                with urllib.request.urlopen(link.replace("=s220", "=s1600"), timeout=60) as r:
+                    return r.read(), None
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
+                motivo = e
+        return None, motivo
+
     def procesar(pid):
+        # Una foto rota no tira el lote: cualquier excepcion queda anotada como
+        # fallida con su motivo y la corrida sigue (antes, una excepcion del
+        # detector salia por ex.map y cortaba el año entero).
         try:
-            link = d.get("files/" + pid, fields="thumbnailLink").get("thumbnailLink")
-            if not link:
-                # Sin miniatura es una foto que no se pudo bajar, y se cuenta
-                # como tal. Salia sin contarse: su album nunca cerraba
-                # (anotar_revisadas) y el paso "caras" lo repasaba cada hora
-                # (13/9/2026, 5 albumes de 1 a 41 fotos).
-                with lock:
-                    cuenta["error"] += 1
-                    fallidas[carpeta_de[pid]] += 1
-                return []
-            with urllib.request.urlopen(link.replace("=s220", "=s1600"), timeout=60) as r:
-                data = r.read()
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
-            with lock:
-                cuenta["error"] += 1
-                fallidas[carpeta_de[pid]] += 1
-            return []
+            return medir(pid)
+        except Exception as e:
+            return fallo(pid, e)
+
+    def medir(pid):
+        data, motivo = bajar(pid)
+        if data is None:
+            return fallo(pid, motivo)
 
         c = mis_caras()
         img = c.leer(data)
         if img is None:
-            with lock:
-                cuenta["error"] += 1
-                fallidas[carpeta_de[pid]] += 1
-            return []
+            return fallo(pid, "imagen ilegible")
         alto, ancho = img.shape[:2]
 
         filas, vistos = [], set()
         vecs_ok, pers_ok, anios_ok = galerias[camada_carpeta.get(carpeta_de[pid])]
-        caras = [x for x in c.detectar(img) if min(x[2], x[3]) >= LADO_MIN]
+        # Se detecta con el piso del recuadro (40) y se reparte: las de 60 o
+        # mas siguen como siempre; las de 40 a 59 solo dejan su recuadro
+        # (faces.repartir, CACHE_CHICAS). Se arma todo antes de tocar las
+        # listas compartidas: si algo falla a mitad de la foto, no queda nada
+        # suyo a medias.
+        caras, chicas_foto = faces.repartir(c.detectar(img, lado_min=faces.LADO_RECUADRO),
+                                            piso_huella=LADO_MIN)
+        mias_chicas = []
+        for x in chicas_foto:
+            x0, y0, w0, h0 = [float(v) for v in x[:4]]
+            mias_chicas.append((pid, (round(x0 / ancho, 4), round(y0 / alto, 4),
+                                      round(w0 / ancho, 4), round(h0 / alto, 4)),
+                                min(w0, h0)))
+        mias_todas, mias_huellas, mias_brecha = [], [], []
         for cara in caras:
             h = c.huella(img, cara)
             if h is None:
@@ -637,9 +844,8 @@ def main():
             # se guarda ANTES de decidir si se propone a alguien: el punto es
             # justamente quedarse con las que hoy no se parecen a nadie
             x0, y0, w0, h0 = [float(v) for v in cara[:4]]
-            with lock:
-                todas.append((pid, (round(x0 / ancho, 4), round(y0 / alto, 4),
-                                    round(w0 / ancho, 4), round(h0 / alto, 4)), h))
+            mias_todas.append((pid, (round(x0 / ancho, 4), round(y0 / alto, 4),
+                                     round(w0 / ancho, 4), round(h0 / alto, 4)), h))
             s = vecs_ok @ h
             if not len(s):
                 # album de camada sin referencias de la camada ni del staff:
@@ -666,24 +872,29 @@ def main():
                           "origen": ORIGEN,
                           "bx": round(x / ancho, 4), "by": round(y / alto, 4),
                           "bw": round(w / ancho, 4), "bh": round(hh / alto, 4)})
-            with lock:
-                huellas.append((pid, p, h))
-                if p not in del_anio:
-                    cuenta["por_camada"] += 1
-                if a.ensayo and a.carpeta:
+            mias_huellas.append((pid, p, h))
+            # el staff no tiene año de referencia: se marca -1 y contarlo
+            # como distancia daria 2022 años
+            ar = int(anios_ok[k])
+            mias_brecha.append(abs(ar - a.anio) if ar > 0 else None)
+            if a.ensayo and a.carpeta:
+                with lock:
                     print("  propuesta  foto %s  persona %d  %.3f%s"
                           % (pid, p, float(s[k]),
                              "  (por camada)" if p not in del_anio else ""))
-            with lock:
-                # el staff no tiene año de referencia: se marca -1 y contarlo
-                # como distancia daria 2022 años
-                ar = int(anios_ok[k])
-                brecha.append(abs(ar - a.anio) if ar > 0 else None)
 
         with lock:
+            todas.extend(mias_todas)
+            chicas.extend(mias_chicas)
+            huellas.extend(mias_huellas)
+            brecha.extend(mias_brecha)
+            cuenta["por_camada"] += sum(1 for _, p, _ in mias_huellas if p not in del_anio)
+            salieron.add(pid)
             cuenta["fotos"] += 1
             medidas[carpeta_de[pid]] += 1
             cuenta["caras"] += len(caras)
+            cuenta["chicas"] += len(mias_chicas)
+            cuenta["fotos_con_chicas"] += bool(mias_chicas)
             if filas:
                 cuenta["con_gente"] += 1
                 cuenta["personas"] += len(filas)
@@ -737,21 +948,54 @@ def main():
             m = guardar_todas(todas)
             print("Caras detectadas guardadas (propuestas o no): %d nuevas, "
                   "%d en total" % (len(todas), m))
+            k = guardar_chicas(chicas, salieron)
+            if k is not None:
+                print("Recuadros chicos (%d-%d px, sin huella) guardados: %d de %d fotos, "
+                      "%d en total" % (faces.LADO_RECUADRO, LADO_MIN - 1, len(chicas),
+                                       len(salieron), k))
             # Recien con las caras guardadas: anotar antes dejaria un album
             # "revisado" sin sus caras, que es el agujero que esto tapa.
-            if not a.muestra:
+            if not a.muestra and not a.solo_fallidas:
                 anotar_revisadas(cli, fol, conteo, por_carpeta, medidas, fallidas)
         except Exception as e:
             # que no se pueda guardar el cache no puede voltear la corrida: lo
             # que importa -las propuestas- ya esta escrito en la base
             print("No se pudo guardar el cache de caras: %s" % str(e)[:120])
+        registrar_fallidas(cli, fallaron, salieron, carpeta_de, abiertas)
     n = max(cuenta["fotos"], 1)
     print("\n--- %d ---" % a.anio)
     print("Fotos procesadas:        %d" % cuenta["fotos"])
     print("Caras grandes halladas:  %d  (%.1f por foto)" % (cuenta["caras"], cuenta["caras"] / n))
+    print("Recuadros chicos %d-%d:  %d  en %d fotos (sin huella: no van a "
+          "_caras_todas, grupos ni sugerencias)"
+          % (faces.LADO_RECUADRO, LADO_MIN - 1, cuenta["chicas"], cuenta["fotos_con_chicas"]))
     print("Fotos con alguien:       %d  (%.0f%%)" % (cuenta["con_gente"], 100.0 * cuenta["con_gente"] / n))
     print("Personas reconocidas:    %d  (%.2f por foto)" % (cuenta["personas"], cuenta["personas"] / n))
-    print("Errores de descarga:     %d" % cuenta["error"])
+    print("Fotos que fallaron:      %d  (bajada, lectura o detector)" % cuenta["error"])
+    if fallaron:
+        print("Fotos que fallaron (despues de %d intentos de bajada):" % INTENTOS_BAJAR)
+        for pid, m in sorted(fallaron.items())[:20]:
+            print("   %s  %s" % (pid, m))
+    if abiertas:
+        print("Fallidas que ya estaban abiertas en estas carpetas: %d   salieron bien ahora: %d"
+              % (len(abiertas), len(set(abiertas) & salieron)))
+    if a.ensayo:
+        # lo que se haria con las fotos de las cajas, para verlo en el ensayo
+        en_todas = {f for f, _, _ in todas}
+        cajas_todas = {(f, c) for f, c, _ in todas}
+        cruzadas = sum(1 for f, c, _ in chicas if (f, c) in cajas_todas)
+        print("Control: recuadros chicos que tambien estarian en _caras_todas: %d "
+              "(fotos con alguno de los dos: %d)" % (cruzadas, len(en_todas | {f for f, _, _ in chicas})))
+        if a.carpeta:
+            from collections import defaultdict as _dd
+            lados = _dd(list)
+            for f, c, l in chicas:
+                lados[f].append(int(l))
+            print("Por foto (grandes / chicas):")
+            g = Counter(f for f, _, _ in todas)
+            for f in sorted(set(g) | set(lados)):
+                print("   %s  %3d / %3d  %s" % (f, g.get(f, 0), len(lados.get(f, [])),
+                                             sorted(lados.get(f, []))))
     if camada_carpeta:
         print("Albums de camada en esta corrida: %d   propuestas que entran por la camada: %d"
               % (len(set(camada_carpeta) & set(fol)), cuenta["por_camada"]))

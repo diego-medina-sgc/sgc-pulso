@@ -88,6 +88,8 @@ CLAVES = {
     # caras_repasar.py --todo la lee entera (8.000+ filas, 16/10/2026): por
     # desplazamiento una carpeta salteada no se repasaba nunca
     "carpetas_caras_revisadas": ("folder_id",),
+    # las fotos que fallaron en el detector (faces_eventos.py, 21/10/2026)
+    "caras_fotos_fallidas":  ("photo_id",),
     "corridas":              ("id",),
     "enrollments":           ("id",),
     "face_group_meta":       ("grupo",),

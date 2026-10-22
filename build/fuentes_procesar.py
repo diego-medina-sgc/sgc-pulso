@@ -133,6 +133,37 @@ def nombre_de_nota(nota):
     return t.strip()
 
 
+# La marca de las fuentes cuyas fotos van al reconocimiento sin dar caras de
+# referencia. fuentes_al_catalogo.py la busca en el resultado para agregarle en
+# que parte del circuito estan (catalogo, detector).
+AL_RECONOCIMIENTO = ("van al reconocimiento: las caras que no se conozcan "
+                     "quedan en grupos para que las nombre el equipo")
+
+
+# Cuantas imagenes se miden en una carpeta sin nombres para saber si hay gente.
+# Medido el 21/10/2026 sobre las 36 fuentes que estaban asi: en las de logos,
+# banners y flyers ninguna imagen tenia cara; en las de gente, casi todas.
+MUESTRA_CARAS = 20
+
+
+def sin_nombres(n, medidas, con_cara, err):
+    """(estado, resultado) de una carpeta en la que ningun archivo trae nombre."""
+    if con_cara == 0 and set(err) <= {"no se detecto cara"}:
+        return ("listo",
+                "Ninguno de los %d archivos trae un nombre y ninguna de las %d "
+                "imagenes medidas tiene una cara: no es una carpeta de gente."
+                % (n, medidas))
+    if con_cara == 0:
+        return ("error",
+                "Ninguno de los %d archivos trae un nombre y no se pudieron leer "
+                "las imagenes (%s)." % (n, ", ".join("%s: %d" % (k, v)
+                                                     for k, v in err.most_common())))
+    return ("listo",
+            "Ninguno de los %d archivos trae un nombre (son codigos de camara): "
+            "no da caras de referencia. %d de %d imagenes medidas tienen cara y "
+            "sus fotos %s." % (n, con_cara, medidas, AL_RECONOCIMIENTO))
+
+
 def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     """Lee una carpeta de Drive con una foto por persona.
 
@@ -204,14 +235,26 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     # leyo bien y el veredicto es que no sirve. Como error inflaba el aviso
     # fuentes_con_error de salud() con 30 carpetas que no hay que arreglar.
     # Y desde el 19/9/2026 tampoco 'descartada': Diego saco ese estado ("nada
-    # anotado en Fuentes se descarta"). Sin nombres en los archivos, la fuente
-    # espera a que alguien diga quien esta: eso es 'a_mano'.
+    # anotado en Fuentes se descarta").
+    #
+    # SIN NOMBRES NO ES 'a_mano' (21/10/2026). Quedaba esperando "a que alguien
+    # diga quien esta", y eso no lo hace nadie: a Diego no se le pide reconocer
+    # chicos. 36 fuentes quedaron asi en "Te necesita" desde el 11/9. Lo que no
+    # tiene nombre lo nombra el equipo en los juegos: las fotos van al
+    # reconocimiento (catalogo -> paso caras -> grupos) y la fuente esta leida
+    # entera, que es 'listo'. Se miden las caras para no mandar logos: sin
+    # ninguna cara es 'listo' sin gente, la misma regla de abajo.
     if not resuelto and not sin_padron:
-        return ("a_mano",
-                "Ninguno de los %d archivos trae un nombre: son codigos de "
-                "camara. Esta fuente no sirve por el nombre del archivo."
-                % len(img),
-                0, 0)
+        # una muestra pareja y no todas: alcanza para separar gente de logos, y
+        # una carpeta de mil fotos no le lleva media hora al paso fuentes
+        paso_m = max(len(img) // MUESTRA_CARAS, 1)
+        muestra = img[::paso_m][:MUESTRA_CARAS]
+        tienen, _, _, err = medir_caras(
+            d, [(x["id"], x["name"], {"id": 0}, campus, coh) for x in muestra], limite)
+        estado, texto = sin_nombres(len(img), len(muestra), len(tienen), err)
+        if not escribir:
+            return "pendiente", "ENSAYO — %s: %s" % (estado, texto), None, None
+        return estado, texto, 0, 0
 
     # BUSCAR FOTOS POR NOMBRE NO DA DE ALTA PERSONAS.
     #
@@ -310,6 +353,16 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
             d, [(g, arch, {"id": 0}, camp, c)
                 for g, arch, _nom, camp, c in sin_padron], limite)
         con_cara = len(caras_sp)
+        # las fotos sin nombre de la misma carpeta van al reconocimiento igual
+        # (ver sin_nombres); no se las calla
+        otras = len(img) - len(sin_padron)
+        if con_cara == 0 and set(err) <= {"no se detecto cara"} and otras > 0:
+            return ("listo",
+                    "Ninguno de los %d archivos coincide con alguien del padron y "
+                    "los %d que traen nombre no tienen cara: no da caras de "
+                    "referencia. Las otras %d fotos no traen nombre y %s."
+                    % (len(img), len(sin_padron), otras, AL_RECONOCIMIENTO),
+                    0, 0)
         if con_cara == 0 and set(err) <= {"no se detecto cara"}:
             return ("listo",
                     "Ninguno de los %d archivos coincide con alguien del padron "
@@ -344,6 +397,16 @@ def procesar_carpeta(d, cli, idx, f, escribir, limite=0):
     # queda para lo que si hay que arreglar: bajar la foto, abrir la carpeta.
     # 19/9/2026: queda 'listo' con 0 caras (se leyo entera y no habia gente),
     # no 'descartada', que ya no existe.
+    # Si ademas hay fotos sin nombre en el archivo, esas no se midieron aca:
+    # van al reconocimiento como las de una carpeta sin nombres (ver
+    # sin_nombres). Decir "no es una carpeta de gente" era falso.
+    otras = len(img) - len(resuelto) - len(sin_padron)
+    if not vecs and set(err) == {"no se detecto cara"} and otras > 0:
+        return ("listo",
+                "Se resolvieron %d nombres pero esas fotos no tienen cara: no "
+                "da caras de referencia. Las otras %d fotos no traen nombre y %s."
+                % (len(resuelto), otras, AL_RECONOCIMIENTO),
+                0, 0)
     if not vecs and set(err) == {"no se detecto cara"}:
         return ("listo",
                 "Se resolvieron %d nombres pero no hay ninguna cara en las "
@@ -396,7 +459,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--aplicar", action="store_true")
     ap.add_argument("--ensayo", action="store_true")
-    ap.add_argument("--id", type=int, default=0, help="procesar solo esa fuente")
+    ap.add_argument("--id", default="",
+                    help="procesar solo esa fuente (o varias, separadas por coma)")
     ap.add_argument("--limite", type=int, default=0,
                     help="cuantas caras medir por fuente, para probar")
     a = ap.parse_args()
@@ -405,7 +469,8 @@ def main():
     cli = sb.SB()
     filtros = {"select": "id,url,tipo,anio,campus,kind,nota,estado,da_de_alta,source_alta"}
     if a.id:
-        filtros["id"] = "eq.%d" % a.id
+        ids = [int(x) for x in str(a.id).split(",") if x.strip()]
+        filtros["id"] = "in.(%s)" % ",".join(map(str, ids))
     else:
         filtros["estado"] = "eq.pendiente"
     cola = sorted(cli.select("fuentes", **filtros), key=lambda f: f["id"])

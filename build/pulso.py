@@ -213,6 +213,15 @@ DESPUES_DE_GRUPOS = ("paso:grupos",)
 #            npz:<base>* (patron)          paso:<nombre> (cuando termino bien)
 PASOS = [
     paso("fuentes",        ["fuentes_procesar.py", "--aplicar"], ["db:fuentes"], cada_h=0),
+    # Lo anotado en Fuentes al catalogo y al detector (21/10/2026): anota las
+    # carpetas en fuentes_fotos (las recorre el sync), le pone año a las raices
+    # que no lo tienen -sin año el paso caras no las pasa- y escribe en cada
+    # fuente sin nombres en que parte del circuito esta. Se corria a mano y 36
+    # fuentes esperaron desde el 11/9. caras_pendientes: para que el resultado
+    # de la fuente diga cuando sus fotos pasaron por el detector. quieto=False:
+    # no toca caras ni grupos.
+    paso("catalogo",       ["fuentes_al_catalogo.py", "--aplicar"],
+         ["db:fuentes", "db:caras_pendientes"], quieto=False, cada_h=0),
     # Las listas de personas del panel de Fuentes (alumnos, exalumnos, staff):
     # se vuelven a cargar cuando cambia su link u hoja o Diego toca "Leer de
     # nuevo" (sql/fuentes_panel.sql). Antes que las caras: sin la persona en el
@@ -292,8 +301,10 @@ PASOS = [
          cada_h=12, ventana=VENTANA_GRUPOS),
     # Las caras que no quedaron en ningun grupo, compactas, para que el visor
     # les dibuje recuadro y se puedan nombrar (sql/caras_mapa.sql).
+    # Los recuadros chicos (40-59 px, sin huella) tambien: _caras_chicas
+    # cambia cuando el paso caras mide fotos (21/10/2026).
     paso("mapa",           ["caras_mapa.py", "--aplicar"],
-         ["paso:grupos", "npz:_caras_todas"], quieto=True),
+         ["paso:grupos", "npz:_caras_todas", "npz:_caras_chicas"], quieto=True),
     # Por album, cuantas caras no tienen nombre: el filtro "+ ¿Quién es?" de la
     # home (sql/filtro_quien_es.sql). Cambia con los grupos, el mapa y las
     # sugerencias.

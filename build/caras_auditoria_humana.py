@@ -123,10 +123,16 @@ def main():
             de_caja.setdefault((TF[i], round(float(TC[i][0]), 4), round(float(TC[i][1]), 4)), i)
     TV = tz["vecs"]
     print("  huellas por recuadro confirmado: %d" % len(de_caja), flush=True)
+    # Un recuadro chico (40-59 px, faces.LADO_RECUADRO) no tiene huella: no se
+    # le presta la de la cara que el reconocimiento habia propuesto en esa foto
+    # para esa persona, que es otra cara (21/10/2026).
+    chicas = faces.cajas_chicas(fotos_caja)
 
     def huella(k):
         c = caja.get(k)
         if c is not None:
+            if (k[0], c[0], c[1]) in chicas:
+                return None
             i = de_caja.get((k[0], c[0], c[1]))
             if i is not None:
                 v = TV[i].astype(np.float32)

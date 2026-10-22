@@ -305,6 +305,61 @@ def folder_row(f, parent_id, path_of, campus):
     }
 
 
+# EL AÑO DE LA RAIZ DE UNA FUENTE CARPETA (21/10/2026)
+#
+# El año de una carpeta sale de su nombre (parse_date) y, si no lo dice, de la
+# madre: lo hereda el trigger folders_hereda_de_madre. La raiz de una fuente
+# tipo carpeta entra SIN madre en la base -su madre de Drive no esta anotada- y
+# se quedaba sin año aunque el camino lo dijera: "Lockwood < Houses < Secondary
+# < This is Us < North < Contenido < Georgian 2020". Medido ese dia: 140 raices
+# sin año, ni una con el año que una persona habia puesto en Fuentes (54).
+#
+# Y sin año no hay reconocimiento: el paso caras va por años
+# (carpetas_caras_pendientes pide year, faces_eventos.py filtra por --anio).
+# De las 36 fuentes que esperaban "a mano", 17 tenian fotos en el catalogo y
+# cero caras en grupos, mapa o sugerencias por esto.
+#
+# La regla es la misma que si la madre estuviera en la base:
+#   1. el año que puso una persona en Fuentes (fuentes.anio);
+#   2. si no, el primero que nombra el camino de Drive, de adentro hacia afuera.
+# Medido: en las 52 raices que tienen las dos cosas, coinciden las 52.
+HONDO_ANIO = 20
+
+
+def anio_del_camino(nombres):
+    """El primer año que nombran las carpetas madre, de la mas cercana a la raiz
+    de Drive. Con el mismo parse_date que el nombre de cada carpeta."""
+    for n in nombres:
+        y = parse_date((n or "").strip())[0]
+        if y:
+            return y
+    return None
+
+
+def anio_de_raiz(drive, supa, fid, parents):
+    """El año de la raiz de una fuente carpeta (ver arriba), o None.
+
+    No levanta: un año que no se pudo leer no puede tirar la fuente."""
+    try:
+        filas = supa.select("fuentes?select=anio&anio=not.is.null&url=like.*%s*" % fid) or []
+        anios = {int(f["anio"]) for f in filas}
+        if len(anios) == 1:
+            return anios.pop()
+    except Exception as e:
+        _log("  (no se pudo leer el año de Fuentes: %s)" % str(e)[:120])
+    nombres, cur = [], (parents or [None])[0]
+    for _ in range(HONDO_ANIO):
+        if not cur:
+            break
+        try:
+            m = drive.get("files/" + cur, fields="name,parents", supportsAllDrives="true")
+        except Exception:
+            break
+        nombres.append(m.get("name") or "")
+        cur = (m.get("parents") or [None])[0]
+    return anio_del_camino(nombres)
+
+
 def photo_row(f, parent_id):
     md = f.get("imageMediaMetadata") or {}
     return {
@@ -815,6 +870,12 @@ def sync_carpeta(drive, supa, fuente, a, state):
     orden = sorted(carpetas, key=profundidad)
     frows = [folder_row(carpetas[c][0], carpetas[c][1], (carpetas[c][0].get("name") or "").strip(), campus_de(sede))
              for c in orden]
+    # la raiz se escribe sin madre: su año no lo hereda de nadie (ver anio_de_raiz)
+    for r in frows:
+        if r["id"] == root and r["parent_id"] is None and r["year"] is None:
+            r["year"] = anio_de_raiz(drive, supa, root, carpetas[root][0].get("parents"))
+            if r["year"]:
+                _log("  año de la raiz: %d (de Fuentes o del camino de Drive)" % r["year"])
     known = conocidas | set(carpetas)
     prows = [photo_row(f, parent) for (f, parent) in fotos.values() if parent in known]
     with _ESCRIBIR:
