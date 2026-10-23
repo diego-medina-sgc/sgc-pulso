@@ -91,6 +91,8 @@ CLAVES = {
     # las fotos que fallaron en el detector (faces_eventos.py, 21/10/2026)
     "caras_fotos_fallidas":  ("photo_id",),
     "corridas":              ("id",),
+    # fotos_duplicadas.py elige la copia que tiene caras (23/10/2026)
+    "caras_mapa":            ("photo_id",),
     "enrollments":           ("id",),
     "face_group_meta":       ("grupo",),
     "face_group_names":      ("grupo",),

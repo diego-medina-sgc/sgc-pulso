@@ -248,6 +248,16 @@ PASOS = [
     # referencias, para que su cara cuente en la misma vuelta.
     paso("nombres",        ["retratos_nombres.py", "--aplicar"], ["db:retratos_nombres"],
          quieto=False, cada_h=0),
+    # LA MISMA FOTO DOS VECES (22/10/2026). Las fotos que entraron en el
+    # ultimo dia contra todo el archivo de su mismo tamaño, y un tramo del
+    # barrido de todo el archivo (cursor en corridas, tarea 'duplicados'):
+    # ~25 min por vuelta mientras haya barrido, segundos despues. Drive
+    # confirma por md5 y queda una sola primaria (fotos_duplicadas.py).
+    # Antes que las caras: la copia que se baja ya no se procesa ni se
+    # pregunta. Sin entradas: corre todas las vueltas (lo nuevo lo sabe
+    # photos.indexed_at, que pulso_firmas no cuenta). quieto=False: no
+    # renumera nada, solo saca copias de la cola y les copia los nombres.
+    paso("duplicados",     ["fotos_duplicadas.py", "--aplicar"], [], quieto=False),
     paso("grupales",       ["retratos_grupales.py", "--aplicar"], ["db:retratos"]),
     paso("huellas",        ["faces_huellas.py"], ["db:retratos"]),
     # Los albumes de evento que no pasaron enteros por el detector: sin esto
