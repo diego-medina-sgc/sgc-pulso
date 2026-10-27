@@ -258,6 +258,20 @@ PASOS = [
     # photos.indexed_at, que pulso_firmas no cuenta). quieto=False: no
     # renumera nada, solo saca copias de la cola y les copia los nombres.
     paso("duplicados",     ["fotos_duplicadas.py", "--aplicar"], [], quieto=False),
+    # LAS FOTOS DE CELULAR ACOSTADAS (27/10/2026). Drive dice cuanto hay que
+    # girar cada foto y hasta el 26/10 ese dato no se guardaba: la app mostraba
+    # acostadas las fotos tomadas en vertical. El sync ya lo trae para lo que
+    # entra; esto llena las que ya estaban. Son 10.073 carpetas y va de a 600
+    # por vuelta con el cursor en corridas (tarea 'rotacion', etiqueta
+    # 'barrido'): ~17 vueltas. Medido el 27/10: un tramo son 42 s de listados
+    # y 26.421 fotos, o sea 0,07 s por carpeta con 8 hilos.
+    # Cuando termina se queda quieto y repasa a los 7 dias. Sin entradas, como
+    # duplicados: lo que falta lo sabe photos.rotation, que pulso_firmas no
+    # cuenta. quieto=False: no toca caras ni grupos, solo una columna que lee
+    # la app. --igual-con-el-pulso porque el pulso ya corre sus pasos de a uno:
+    # el freno de sb.pasos_del_pulso es para una corrida a mano desde afuera.
+    paso("rotacion",       ["rotacion.py", "--pulso", "--aplicar",
+                            "--igual-con-el-pulso"], [], quieto=False),
     paso("grupales",       ["retratos_grupales.py", "--aplicar"], ["db:retratos"]),
     paso("huellas",        ["faces_huellas.py"], ["db:retratos"]),
     # Los albumes de evento que no pasaron enteros por el detector: sin esto
