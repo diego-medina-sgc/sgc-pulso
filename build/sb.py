@@ -90,6 +90,8 @@ CLAVES = {
     "carpetas_caras_revisadas": ("folder_id",),
     # las fotos que fallaron en el detector (faces_eventos.py, 21/10/2026)
     "caras_fotos_fallidas":  ("photo_id",),
+    # los .txt con epigrafes que John deja en las carpetas (26/10/2026)
+    "carpeta_notas":         ("id",),
     "corridas":              ("id",),
     # fotos_duplicadas.py elige la copia que tiene caras (23/10/2026)
     "caras_mapa":            ("photo_id",),
@@ -549,3 +551,27 @@ class SB:
                     mandar(trozo)
             n += len(trozo)
         return n
+
+
+# ---------------------------------------------------------------- el pulso
+
+# EL PASO QUE FRENA UNA ESCRITURA A MANO ES 'caras' (26/10/2026). La regla de
+# la casa es no escribir con una vuelta del pulso en curso, pero el pulso corre
+# cada hora y una vuelta puede durar dos: esperar a que no haya NINGUN paso
+# corriendo es no escribir nunca. El que no puede compartir la base con una
+# carga de identificaciones es 'caras' (escribe photo_people y
+# face_suggestions). '_vuelta' no es un paso: es la vuelta entera.
+PASOS_QUE_FRENAN = ("caras",)
+
+
+def pasos_del_pulso(cli):
+    """(los que frenan una escritura, los que solo se avisan), ahora mismo."""
+    try:
+        filas = cli.select("corridas", select="tarea,etiqueta,estado",
+                           tarea="eq.pulso", estado="eq.corriendo") or []
+    except Exception as e:                                        # noqa: BLE001
+        print("  aviso: no se pudo leer corridas (%s)" % str(e)[:140])
+        return [], []
+    etq = [f.get("etiqueta") for f in filas]
+    return ([e for e in etq if e in PASOS_QUE_FRENAN],
+            [e for e in etq if e not in PASOS_QUE_FRENAN])

@@ -76,7 +76,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 FIELDS = ("nextPageToken,newStartPageToken,changes("
           "removed,fileId,file(id,name,mimeType,parents,trashed,webViewLink,"
-          "modifiedTime,size,imageMediaMetadata(width,height,time)))")
+          "modifiedTime,size,md5Checksum,"
+          "imageMediaMetadata(width,height,time,rotation)))")
 
 
 load_env()
@@ -358,12 +359,37 @@ def anio_de_raiz(drive, supa, fid, parents):
         nombres.append(m.get("name") or "")
         cur = (m.get("parents") or [None])[0]
     return anio_del_camino(nombres)
+def giro(md):
+    """Cuanto hay que girar la foto, en cuartos de vuelta en sentido del reloj.
+
+    Drive lo informa en imageMediaMetadata.rotation (0 a 3) y entrega el bitmap
+    -y la miniatura- SIN girar: sin este dato la app muestra acostada toda foto
+    de celular tomada en vertical (medido el 26/10/2026: ~11 % del archivo).
+
+    Nulo no es 0. Nulo quiere decir "todavia no se leyo"; 0 es "no hay que
+    girarla". Drive a veces tiene la foto y NO informa rotation (escaneos,
+    PNG, fotos sin EXIF; medido el 26/10: 1 de 889 en una muestra al azar,
+    pero 8 de 13 en una carpeta de escaneos). Diego decidio el 26/10 que esos
+    valen 0: para la app es lo mismo -no girar- y la foto deja de revisarse en
+    cada tramo del backfill. Solo queda nulo la foto que todavia no se miro,
+    es decir cuando Drive no devuelve imageMediaMetadata.
+    """
+    if not md:
+        return None
+    r = md.get("rotation")
+    if r is None:
+        return 0
+    try:
+        return int(r) % 4
+    except (TypeError, ValueError):
+        return None
 
 
 def photo_row(f, parent_id):
     md = f.get("imageMediaMetadata") or {}
     return {
         "id": f["id"],
+        "rotation": giro(md),
         "folder_id": parent_id,
         "name": f.get("name") or "",
         "mime_type": f.get("mimeType"),
@@ -374,6 +400,139 @@ def photo_row(f, parent_id):
         "height": md.get("height"),
         "size_bytes": int(f["size"]) if str(f.get("size") or "").isdigit() else None,
     }
+
+
+# ---------------------------------------------------------------- notas (.txt)
+#
+# LOS EPIGRAFES DE JOHN (26/10/2026). Al digitalizar, John deja en la carpeta un
+# .txt que se llama igual que la foto y dice lo que la foto trae escrito atras:
+# el curso y los nombres por fila. Antes el sync los tiraba: solo mira carpetas
+# e imagenes.
+#
+# Se juntan de los tres lados por los que ya pasa el sync -el recorrido de una
+# carpeta, los cambios de una unidad y la lista de modificados- y ademas se
+# barre una vez por pasada todo lo que la cuenta ve con mimeType text/plain:
+# medido el 26/10, son 22 archivos y 1,3 s. El barrido existe porque un .txt
+# subido antes de que esto existiera no esta en ningun corte de cambios y no
+# entraria nunca. La lista se filtra con carpeta_nota_ruido() ANTES de bajar
+# nada (OFL.txt, License, Fonts, UserSelections son carpetas de diseno), se
+# pasa por carpeta_notas_pendientes() para no volver a bajar lo que no cambio,
+# y lo que se baja va a carpeta_notas_guardar(). La atadura nota -> foto la
+# hace la base por nombre base; si la imagen no esta indexada queda nula y se
+# ata en la pasada siguiente.
+_NOTAS = {}
+_NOTAS_LOCK = threading.Lock()
+
+
+def es_nota(f):
+    """Un .txt (o cualquier text/plain) que puede ser un epigrafe."""
+    nombre = (f.get("name") or "").lower()
+    return (f.get("mimeType") or "") == "text/plain" or nombre.endswith(".txt")
+
+
+def anotar_nota(f, parent):
+    if not f or not f.get("id") or not parent:
+        return
+    with _NOTAS_LOCK:
+        _NOTAS[f["id"]] = {
+            "id": f["id"], "folder_id": parent, "nombre": f.get("name") or "",
+            "modificado": f.get("modifiedTime"),
+            "bytes": int(f["size"]) if str(f.get("size") or "").isdigit() else None,
+            "md5": f.get("md5Checksum"),
+        }
+
+
+def barrer_notas(drive):
+    """Todos los text/plain que ve la cuenta, una vez por pasada."""
+    try:
+        vistos = 0
+        for f in listar(drive, q="mimeType='text/plain' and trashed=false",
+                        corpora="allDrives"):
+            vistos += 1
+            anotar_nota(f, (f.get("parents") or [None])[0])
+        print("  notas .txt que ve la cuenta: %d" % vistos)
+    except Exception as e:                      # noqa: BLE001
+        # una nota que no se pudo listar no puede tirar la pasada de fotos
+        print("  aviso: no se pudo barrer los .txt (%s)" % str(e)[:200])
+
+
+def bajar_texto(drive, nota_id):
+    r = _sesion("notas").get(
+        "https://www.googleapis.com/drive/v3/files/%s" % nota_id,
+        params={"alt": "media", "supportsAllDrives": "true"},
+        headers={"Authorization": "Bearer " + drive._token()}, timeout=60)
+    r.raise_for_status()
+    # UTF-8 tal cual, como lo guarda la base. Si algun dia viene en otra
+    # codificacion se guarda igual, con los caracteres que no entran
+    # reemplazados, y no se pierde la nota entera.
+    return r.content.decode("utf-8", "replace")
+
+
+def guardar_notas(drive, supa, a):
+    """Lo junta todo y lo manda a la base. Devuelve lo que contesto la base."""
+    with _NOTAS_LOCK:
+        todas = list(_NOTAS.values())
+    if not todas:
+        return None
+    # el ruido se saca ANTES de bajar nada, y la lista de ruido vive en la base
+    ruido, utiles = {}, []
+    for n in todas:
+        nombre = n["nombre"]
+        if nombre not in ruido:
+            try:
+                ruido[nombre] = bool(supa.rpc("carpeta_nota_ruido", {"p_nombre": nombre}))
+            except Exception as e:              # noqa: BLE001
+                avisar_una_vez("nota_ruido", "no se pudo consultar carpeta_nota_ruido "
+                               "(%s): las notas se mandan sin filtrar" % str(e)[:160])
+                ruido[nombre] = False
+        if not ruido[nombre]:
+            utiles.append(n)
+    print("  notas: %d, ruido de carpetas de diseno: %d"
+          % (len(todas), len(todas) - len(utiles)))
+    if not utiles:
+        return None
+    pendientes = set(supa.rpc("carpeta_notas_pendientes", {
+        "p_filas": [{k: n[k] for k in ("id", "nombre", "modificado", "bytes", "md5")}
+                    for n in utiles]}) or [])
+    print("  notas para bajar (nuevas o cambiadas): %d" % len(pendientes))
+    if not pendientes:
+        return None
+    if a.dry_run:
+        print("  (dry-run: no se bajan ni se escriben)")
+        return None
+    filas = []
+    for n in utiles:
+        if n["id"] not in pendientes:
+            continue
+        fila = dict(n, texto=None, folder_id=n["folder_id"], error=None)
+        try:
+            fila["texto"] = bajar_texto(drive, n["id"])
+        except Exception as e:                  # noqa: BLE001
+            # UNA NOTA ROTA NO TIRA EL LOTE: queda con error y la proxima
+            # pasada la vuelve a intentar (carpeta_notas_pendientes la devuelve
+            # mientras tenga error).
+            fila["error"] = str(e)[:300]
+            print("     no se pudo leer %s: %s" % (n["nombre"], fila["error"][:120]))
+        filas.append(fila)
+    res = supa.rpc("carpeta_notas_guardar", {"p_filas": filas}) or {}
+    print("  notas guardadas: %s" % json.dumps(res, ensure_ascii=False))
+    return res
+
+
+def escribir_fotos(supa, prows):
+    """Las fotos, en dos lotes: las que Drive informa con rotation y las que no.
+
+    No es por gusto. PostgREST pide que todas las filas de un upsert tengan las
+    mismas columnas, asi que la opcion facil era mandar rotation = null cuando
+    Drive no lo informa; eso PISA con nulo el giro que ya estuviera guardado.
+    Las que vienen sin el dato se escriben sin esa columna y lo que haya
+    quedado se queda."""
+    con = [r for r in prows if r.get("rotation") is not None]
+    sin = [{k: v for k, v in r.items() if k != "rotation"}
+           for r in prows if r.get("rotation") is None]
+    supa.upsert("photos", con)
+    supa.upsert("photos", sin)
+    return len(prows)
 
 
 # ---------------------------------------------------------------- main
@@ -468,7 +627,7 @@ def sync_unidad(drive, supa, fuente, a, state):
             known = {r["id"] for r in frows}
             prows = [photo_row(f, parent) for (f, parent) in fotos.values()
                      if parent in known]
-            supa.upsert("photos", prows)
+            escribir_fotos(supa, prows)
             print("  escritas: %d carpetas, %d fotos" % (len(frows), len(prows)))
             escrito = bool(frows or prows)
 
@@ -513,6 +672,8 @@ def sync_unidad(drive, supa, fuente, a, state):
                 changed_folders[fid] = (f, parent)
             elif (f.get("mimeType") or "").startswith("image/"):
                 changed_photos[fid] = (f, parent)
+            elif es_nota(f):
+                anotar_nota(f, parent)
 
         token = r.get("nextPageToken")
         if not token:
@@ -599,7 +760,7 @@ def sync_unidad(drive, supa, fuente, a, state):
             huerfanas += 1
             continue
         prows.append(photo_row(f, parent))
-    supa.upsert("photos", prows)
+    escribir_fotos(supa, prows)
     if huerfanas:
         print("  fotos sin carpeta conocida (se veran en el proximo crawl): %d" % huerfanas)
 
@@ -632,7 +793,8 @@ def sync_unidad(drive, supa, fuente, a, state):
 
 
 LISTA_FIELDS = ("nextPageToken,files(id,name,mimeType,parents,trashed,webViewLink,"
-                "modifiedTime,createdTime,size,imageMediaMetadata(width,height,time))")
+                "modifiedTime,createdTime,size,md5Checksum,"
+                "imageMediaMetadata(width,height,time,rotation))")
 
 
 def listar(drive, **params):
@@ -685,8 +847,11 @@ def cambios_desde(drive, corte):
     """Carpetas e imagenes creadas o modificadas despues de corte (UTC, sin zona)."""
     with _CAMBIOS_LOCK:
         if _CAMBIOS["corte"] is None or corte < _CAMBIOS["corte"]:
+            # text/plain va en la misma consulta: son los epigrafes de John y
+            # pedirlos aparte seria otro listado de todo lo que ve la cuenta
             q = ("(modifiedTime > '%s' or createdTime > '%s') and trashed = false and "
-                 "(mimeType = '%s' or mimeType contains 'image/')") % (corte, corte, FOLDER_MIME)
+                 "(mimeType = '%s' or mimeType contains 'image/' "
+                 "or mimeType = 'text/plain')") % (corte, corte, FOLDER_MIME)
             _CAMBIOS["archivos"] = list(listar(drive, q=q, corpora="allDrives"))
             _CAMBIOS["corte"] = corte
             _log("  (lista de cambios de Drive traida desde %s: %d)" % (corte, len(_CAMBIOS["archivos"])))
@@ -727,6 +892,8 @@ def recorrer(drive, carpeta_id):
                 pendientes.append(f["id"])
             elif (f.get("mimeType") or "").startswith("image/"):
                 fotos[f["id"]] = (f, c)
+            elif es_nota(f):
+                anotar_nota(f, c)
     return carpetas, fotos
 
 
@@ -831,6 +998,8 @@ def sync_carpeta(drive, supa, fuente, a, state):
                 continue
             if f.get("mimeType") == FOLDER_MIME:
                 carpetas[f["id"]] = (f, parent)
+            elif es_nota(f):
+                anotar_nota(f, parent)
             else:
                 fotos[f["id"]] = (f, parent)
         _log("  modificados en todo lo que ve la cuenta: %d" % vistos)
@@ -880,7 +1049,7 @@ def sync_carpeta(drive, supa, fuente, a, state):
     prows = [photo_row(f, parent) for (f, parent) in fotos.values() if parent in known]
     with _ESCRIBIR:
         supa.upsert("folders", frows)
-        supa.upsert("photos", prows)
+        escribir_fotos(supa, prows)
 
     fila = {
         "id": sid,
@@ -935,6 +1104,7 @@ def pasada(drive, supa, fuentes, a):
     """Todas las fuentes una vez. Devuelve (si algo cambio, nombres que fallaron)."""
     _CAMBIOS["corte"], _CAMBIOS["archivos"] = None, []
     _MADRES.clear()
+    _NOTAS.clear()
     estados = leer_estados(supa)
     cambios, fallas = False, []
 
@@ -979,6 +1149,17 @@ def pasada(drive, supa, fuentes, a):
         # como pide PostgREST para un upsert en lote)
         if filas_ok:
             supa.upsert("sync_state", filas_ok)
+
+    # LAS NOTAS, AL FINAL Y UNA VEZ. Despues de las carpetas y las fotos: la
+    # base ata la nota a su foto por el nombre, y asi una foto que entro en
+    # esta misma pasada ya esta. Un error aca no es una falla de la pasada: las
+    # fotos ya se escribieron y la nota se vuelve a intentar a la hora.
+    print("\n-- notas de carpeta (.txt)")
+    barrer_notas(drive)
+    try:
+        guardar_notas(drive, supa, a)
+    except Exception as e:                      # noqa: BLE001
+        print("  aviso: no se pudieron guardar las notas (%s)" % str(e)[:300])
     return cambios, fallas
 
 
@@ -1109,6 +1290,11 @@ def main():
     ap.add_argument("--sa", default=os.path.join(HERE, "service-account.json"))
     ap.add_argument("--bootstrap", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    # SOLO LAS NOTAS: el barrido de los .txt sin mirar las fuentes. Sirve para
+    # cargar un epigrafe recien subido sin esperar la hora, y para no largar
+    # una pasada completa de fuentes mientras el pulso esta dando una vuelta.
+    ap.add_argument("--solo-notas", action="store_true",
+                    help="solo los .txt de las carpetas, sin sincronizar fuentes")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     inicio_corrida = time.time()
@@ -1136,6 +1322,13 @@ def main():
     # queda por el concurrency del workflow, o la ventana de 120 s de la Edge
     # Function lo junto con otro). Se da otra vuelta, hasta 5 por corrida:
     # un album que se sube durante 10 minutos va entrando por tandas.
+    if a.solo_notas:
+        print("== solo las notas de carpeta (.txt)")
+        _NOTAS.clear()
+        barrer_notas(drive)
+        guardar_notas(drive, supa, a)
+        return
+
     cambios, fallas = False, []
     for n in range(1, 6):
         comienzo = time.time()
