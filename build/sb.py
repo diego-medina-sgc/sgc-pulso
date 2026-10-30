@@ -53,6 +53,25 @@ def _informar_egress():
 atexit.register(_informar_egress)
 
 
+def salida_pulso(datos):
+    """Deja un resultado del paso para el pulso (30/10/2026).
+
+    El pulso corre cada paso como un proceso aparte y solo ve su codigo de
+    salida. Lo que un paso ya midio y otra parte de la vuelta necesita (los
+    grupos que el resolver dejo sin cerrar, para avance_foto) va a un JSON en
+    la ruta de PULSO_SALIDA; el pulso lo lee si el paso termino bien. Corrido a
+    mano, sin esa variable, no hace nada. Un fallo al escribirlo no tira el
+    paso: es un dato de mas, no el trabajo."""
+    destino = os.environ.get("PULSO_SALIDA")
+    if not destino:
+        return
+    try:
+        with open(destino, "w", encoding="utf-8") as fh:
+            json.dump(datos, fh)
+    except (OSError, TypeError, ValueError) as e:
+        print("  (no se pudo dejar la salida para el pulso: %s)" % e, flush=True)
+
+
 def load_env():
     """Lee build/.env.
 
@@ -201,6 +220,76 @@ def es_fk_fotos(err):
     return "23503" in s and "(photo_id)" in s
 
 
+# QUE ERROR SE REINTENTA Y CUAL NO (30/10/2026)
+#
+# La base corta a 8 s todo lo que llega por PostgREST (statement_timeout del rol
+# authenticator). Con la base cargada, una lectura que tarda medio segundo pasa
+# los 8 s y vuelve como HTTP 500 con codigo 57014. El 30/10 dos vueltas del
+# pulso murieron asi en pulso_firmas() (17.837 llamadas, 0,5 s de media, 8 s
+# de maximo) y se perdio una vuelta de 3 h 39 min sin guardar el estado.
+#
+# PostgREST tambien devuelve 500 por errores que no se curan solos (una funcion
+# rota, un limite de programa): reintentarlos solo atrasa el aviso. Se
+# reintentan los que dependen de la carga o del momento:
+#   40xxx  serializacion y deadlock
+#   55P03  no consiguio el candado a tiempo (lock_timeout, tambien 8 s)
+#   57xxx  statement timeout (57014) y la base reiniciandose (57P01..57P03)
+#   53xxx  sin recursos (PostgREST los devuelve como 503)
+#   08xxx  conexion (503)
+# Un 500 sin codigo (un HTML del gateway) tambien se reintenta: no es un
+# error de datos.
+CODIGOS_TRANSITORIOS = ("40", "55P03", "57", "53", "08", "PGRST000", "PGRST001",
+                        "PGRST002", "PGRST003")
+HTTP_TRANSITORIOS = (401, 429, 502, 503, 504)
+
+
+def codigo_pg(detalle):
+    """El "code" del JSON de error de PostgREST, o None si no vino."""
+    try:
+        return (json.loads(detalle) or {}).get("code")
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def http_transitorio(estado, detalle):
+    """Un error HTTP que puede andar si se pide de nuevo un rato despues."""
+    if estado in HTTP_TRANSITORIOS:
+        return True
+    if estado == 500:
+        cod = codigo_pg(detalle)
+        return cod is None or str(cod).startswith(CODIGOS_TRANSITORIOS)
+    return False
+
+
+class ErrorBase(RuntimeError):
+    """Un error HTTP de la base. str() es el de siempre ("HTTP 500: {...}"),
+    asi los "if '23503' in str(e)" de los scripts siguen andando."""
+
+    def __init__(self, estado, detalle):
+        super().__init__("HTTP %s: %s" % (estado, detalle))
+        self.estado = estado
+        self.detalle = detalle
+        self.codigo = codigo_pg(detalle)
+        self.transitorio = http_transitorio(estado, detalle)
+
+
+def es_transitorio(err):
+    """Si vale la pena pedirlo de nuevo: timeouts, carga, red. Nunca un error
+    de datos (23xxx, 22xxx, 42xxx: el mismo pedido falla igual)."""
+    if isinstance(err, ErrorBase):
+        return err.transitorio
+    return isinstance(err, (urllib.error.URLError, TimeoutError, OSError))
+
+
+# Para las lecturas que una vuelta del pulso no puede perder (pulso_firmas): si
+# despues de los reintentos de _pedir la base sigue sin contestar, se espera
+# esto y se prueba de nuevo. La carga que tapa a pulso_firmas es otro paso
+# pesado (el resolver tardo hasta 536 s, pg_stat_statements al 30/10): unos
+# segundos no alcanzan, unos minutos casi siempre si. Tres intentos mas, en
+# total ~6 min de espera, contra vueltas que duran horas.
+ESPERAS_PACIENTE = (30, 90, 240)
+
+
 def filtro_siguiente(clave, ultimo):
     """"Dame lo que viene despues de esta fila", en sintaxis de PostgREST.
 
@@ -320,10 +409,14 @@ class SB:
                 # cuando se reinicia, y ese 401 se cura solo. La noche del
                 # 11/9 ese blip corto el nocturno a los 48 min, despues de
                 # que la misma key hubiera funcionado 15 min antes.
-                if e.code in (401, 429, 500, 502, 503, 504) and intento < 4:
+                #
+                # Un 500 se reintenta solo si es de carga o de momento (ver
+                # CODIGOS_TRANSITORIOS): un error de la funcion sale enseguida.
+                err = ErrorBase(e.code, detalle)
+                if err.transitorio and intento < 4:
                     time.sleep(2 ** intento)
                     continue
-                raise RuntimeError("HTTP %s: %s" % (e.code, detalle))
+                raise err
             except (urllib.error.URLError, TimeoutError, OSError):
                 if intento < 4:
                     time.sleep(2 ** intento)
@@ -442,6 +535,26 @@ class SB:
             data=json.dumps(payload or {}).encode("utf-8"),
             method="POST", headers=self._headers())
         return self._pedir(req)
+
+    def rpc_paciente(self, nombre, payload=None, esperas=ESPERAS_PACIENTE, avisar=None):
+        """rpc() que aguanta a una base cargada: si el error es transitorio
+        (es_transitorio) despues de los reintentos de _pedir, espera y prueba
+        de nuevo, una vez por cada valor de esperas. Un error de datos sube
+        enseguida. Solo para LECTURAS: reintentar una escritura que corto por
+        tiempo es seguro (Postgres la deshizo), pero cargarle minutos de mas a
+        una base que ya no da abasto no lo es."""
+        for i in range(len(esperas) + 1):
+            try:
+                return self.rpc(nombre, payload)
+            except Exception as e:                                # noqa: BLE001
+                if i == len(esperas) or not es_transitorio(e):
+                    raise
+                try:
+                    (avisar or print)("  %s: la base no contesto (%s); pruebo de nuevo en %d s"
+                                      % (nombre, str(e)[:120], esperas[i]))
+                except Exception:                                 # noqa: BLE001
+                    pass
+                time.sleep(esperas[i])
 
     def delete(self, tabla, **filtros):
         """DELETE de las filas que cumplen el filtro.

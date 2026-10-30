@@ -55,6 +55,15 @@ def main():
     # grupos y la segunda pasada encontro 216 mas sin haber hecho nada nuevo.
     # Se cae solo despues de unas pocas vueltas.
     g1 = g2 = g3 = g4 = c1 = c2 = c3 = c4 = nuevas3 = nuevas4 = fotos = 0
+    # Los grupos que cumplen la regla y siguen abiertos al terminar (lo que
+    # avance_foto guarda como grupos_cerrables: ya contestados + por mayoria +
+    # por caras). Con --escribir, la ultima vuelta que no cierra nada es un
+    # ensayo: el mismo calculo, con las mismas reglas, sin escribir, y da 0.
+    # Si se agotan las 10 vueltas cerrando, va lo de la ultima vuelta: es
+    # justo el grupo trabado que salud() (grupo_cerrable_sin_cerrar) tiene que
+    # ver; con None ese chequeo quedaba en 0 para siempre (30/10/2026). Si el
+    # resolver falla no llega aca, no deja salida y el pulso pasa None.
+    cerrables = None
     for vuelta in range(1, 11):
         r = cli.rpc("grupos_resolver", {
             "p_ensayo": not a.escribir,
@@ -87,7 +96,11 @@ def main():
         nuevas3 += int(r.get("caras_nuevas_por_caras", 0) or 0)
         fotos += int(r.get("fotos_etiquetadas", 0) or 0)
         if not a.escribir or (n1 == 0 and n2 == 0 and n3 == 0 and n4 == 0):
+            cerrables = int(n1 or 0) + int(n2 or 0) + int(n3 or 0)
             break
+    else:
+        # 10 vueltas y la ultima todavia cerro: lo que cerro esa vuelta
+        cerrables = int(n1 or 0) + int(n2 or 0) + int(n3 or 0)
 
     print("")
     print("grupos que ya estaban contestados : %5d  (%d caras)" % (g1, c1))
@@ -98,6 +111,10 @@ def main():
         print("fotos etiquetadas                 : %5d" % fotos)
     else:
         print("ENSAYO: no se escribio nada. Agregale --escribir.")
+    print("grupos cerrables que quedan       : %s" % cerrables)
+    # Para avance_foto (build/pulso.py): asi no corre el resolver otra vez solo
+    # para contar lo mismo (14 s en ensayo, medido el 30/10/2026).
+    sb.salida_pulso({"cerrables": cerrables, "escribio": bool(a.escribir)})
 
 
 if __name__ == "__main__":

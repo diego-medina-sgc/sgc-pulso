@@ -757,8 +757,12 @@ def correr(cli, p, f, motivo, estados):
     egress = os.path.join(LOGS, nombre + ".egress")
     if os.path.exists(egress):
         os.remove(egress)
+    # lo que el paso deja para el resto de la vuelta (sb.salida_pulso)
+    salida = os.path.join(LOGS, nombre + ".salida.json")
+    if os.path.exists(salida):
+        os.remove(salida)
     env = dict(os.environ, FACES_MOTOR=MOTOR, PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
-               SB_EGRESS=egress)
+               SB_EGRESS=egress, PULSO_SALIDA=salida)
     t0 = time.time()
     with open(log, "wb") as fh:
         fh.write(("%s  %s %s\n" % (hora_local(), nombre, motivo)).encode("utf-8"))
@@ -777,7 +781,13 @@ def correr(cli, p, f, motivo, estados):
     except (OSError, ValueError):
         st["mb"] = 0
 
+    st.pop("salida", None)
     if codigo == 0:
+        try:
+            with open(salida, encoding="utf-8") as fh:
+                st["salida"] = json.load(fh)
+        except (OSError, ValueError):
+            pass
         st.update(firma=f, fallos=0, ultimo_ok=ahora().isoformat(), minutos=minutos)
         st.pop("error", None)
         anotar(cli, nombre, "listo", st)
@@ -793,6 +803,72 @@ def correr(cli, p, f, motivo, estados):
            % (nombre, codigo, minutos, st["fallos"], nombre))
     estados[nombre] = dict(st, estado="listo" if codigo == 0 else "error")
     return codigo == 0
+
+
+# UNA LECTURA QUE NO CONTESTA NO TIRA LA VUELTA (30/10/2026)
+#
+# El 30/10 a las 09:09 y 09:11 UTC dos vueltas murieron en pulso_firmas() con
+# HTTP 500 / 57014 (statement timeout a los 8 s, la base cargada por el
+# resolver). La excepcion subia hasta afuera, pulso.py salia con 1 y el
+# workflow salteaba "Guardar el estado" y "Guardar la cache": una vuelta de
+# 3 h 39 min con sus huellas nuevas, perdida.
+#
+# Ahora pulso_firmas() aguanta unos minutos (sb.rpc_paciente) y, si igual no
+# contesta, la vuelta se corta ahi: sin firmas no se puede decidir que corre,
+# pero lo que ya corrio queda, y pulso.py sale con 0 para que el estado se
+# guarde. El corte NO se tapa: _vuelta queda en "error" con el motivo (lo ve
+# salud() y el tablero) y sale una anotacion ::error:: en GitHub Actions.
+class VueltaCortada(Exception):
+    pass
+
+
+def firmas(cli):
+    try:
+        return cli.rpc_paciente("pulso_firmas", avisar=di) or {}
+    except Exception as e:                                        # noqa: BLE001
+        raise VueltaCortada("pulso_firmas() no contesto: %s" % str(e)[:200])
+
+
+def avisar_github(titulo, texto):
+    """Una anotacion visible en la pagina de la corrida (solo en Actions)."""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        limpio = str(texto).replace("\r", " ").replace("\n", " ")[:400]
+        print("::error title=%s::%s" % (titulo, limpio), flush=True)
+
+
+def avance(cli, cerrables):
+    """La foto diaria del avance (sql/avance_historia.sql).
+
+    cerrables: los grupos que el resolver de ESTA vuelta dejo cumpliendo la
+    regla y abiertos (sb.salida_pulso en grupos_resolver.py), o None si el
+    resolver no corrio. Se le pasa a avance_foto(p_cerrables) para que no
+    corra grupos_resolver(true) solo para contar lo mismo: 14,4 s del ensayo
+    contra ~14 s de los demas conteos (medido el 30/10/2026). Con None, la base
+    deja el ultimo valor que tenia.
+
+    Mientras la base tenga la avance_foto() sin parametro, PostgREST contesta
+    404 (PGRST202) y se llama como antes."""
+    try:
+        try:
+            f = cli.rpc("avance_foto", {"p_cerrables": cerrables})
+        except sb.ErrorBase as e:
+            if e.codigo != "PGRST202":
+                raise
+            f = cli.rpc("avance_foto")
+        f = f or {}
+        if f.get("salteado"):
+            # el candado de la base (pg_try_advisory_xact_lock): otra
+            # avance_foto esta corriendo y esta no hizo nada
+            di("  avance: salteado (%s)" % f.get("salteado"))
+            return
+        di("  avance: %s de %s caras con nombre, %s por nombrar, %s personas reconocibles, "
+           "%s grupos cerrables%s"
+           % (f.get("caras_con_nombre"), f.get("caras_mapa"),
+              f.get("caras_por_nombrar"), f.get("personas_reconocibles"),
+              f.get("grupos_cerrables"),
+              "" if cerrables is not None else " (sin resolver en esta vuelta)"))
+    except Exception as e:                                        # noqa: BLE001
+        di("  avance_foto(): no se pudo: %s" % str(e)[:160])
 
 
 def salud(cli):
@@ -895,6 +971,7 @@ def main():
             fh.write(str(os.getpid()))
     t0 = time.time()
     corridos, fallados, salteados = [], [], []
+    cortada = None
     try:
         estados = leer_estados(cli)
         di("=== vuelta%s ===" % (" (ensayo)" if a.ensayo else ""))
@@ -908,7 +985,13 @@ def main():
         for p in PASOS:
             # La foto se saca de nuevo antes de cada paso: el anterior puede
             # haber cambiado justo lo que este lee.
-            db = cli.rpc("pulso_firmas") or {}
+            try:
+                db = firmas(cli)
+            except VueltaCortada as e:
+                cortada = "antes de %s: %s" % (p["nombre"], e)
+                di("  %-16s !  la base no contesta: corto la vuelta aca (lo que ya "
+                   "corrio queda guardado). %s" % (p["nombre"], e))
+                break
             ok, motivo, f, desde = decidir(p, db, estados, p["nombre"] in a.paso)
             if not ok:
                 salteados.append(p["nombre"])
@@ -930,13 +1013,25 @@ def main():
             (corridos if correr(cli, p, f, motivo, estados) else fallados).append(p["nombre"])
 
         mal = None
-        if not a.ensayo:
+        if not a.ensayo and cortada:
+            # con la base sin contestar, salud(), calentar() y avance_foto()
+            # solo le suman carga; la vuelta siguiente las corre
+            di("  salud, calentar y avance -  salteados: la vuelta se corto")
+        elif not a.ensayo:
             # salud() tarda 10 a 30 s y calentar() pide las colas de los juegos:
             # con alguien jugando, la cache ya esta caliente y la salud puede
             # esperar, salvo que la ultima sea vieja (pulso_parado y compania
             # tienen que seguir viendose).
-            min_juego = jugando(cli.rpc("pulso_firmas") or {})
-            if min_juego is not None and salud_reciente(cli):
+            try:
+                min_juego = jugando(firmas(cli))
+            except VueltaCortada as e:
+                # todos los pasos ya corrieron: solo se pierde el reporte
+                cortada = "al final: %s" % e
+                min_juego = None
+                di("  salud, calentar y avance -  salteados: %s" % e)
+            if cortada:
+                pass
+            elif min_juego is not None and salud_reciente(cli):
                 di("  salud y calentar -  alguien esta jugando (ultima respuesta hace %d min)"
                    % min_juego)
             else:
@@ -945,13 +1040,8 @@ def main():
                 # La foto del avance para la curva de largo plazo: caras con
                 # nombre por recuadro tarda segundos y no va en vivo
                 # (sql/avance_historia.sql). Una fila por dia; la del dia se pisa.
-                try:
-                    f = cli.rpc("avance_foto") or {}
-                    di("  avance: %s de %s caras con nombre, %s por nombrar, %s personas reconocibles"
-                       % (f.get("caras_con_nombre"), f.get("caras_mapa"),
-                          f.get("caras_por_nombrar"), f.get("personas_reconocibles")))
-                except Exception as e:
-                    di("  avance_foto(): no se pudo: %s" % str(e)[:160])
+                res = (estados.get("resolver") or {}).get("salida") or {}
+                avance(cli, res.get("cerrables") if "resolver" in corridos else None)
     finally:
         if not a.ensayo and os.path.exists(LOCK):
             os.remove(LOCK)
@@ -962,10 +1052,15 @@ def main():
     resumen = {"corrieron": corridos, "fallaron": fallados,
                "sin_cambios": len(salteados), "minutos": int((time.time() - t0) / 60),
                "salud": mal}
-    anotar(cli, "_vuelta", "error" if (fallados or mal) else "listo", resumen)
+    if cortada:
+        resumen["cortada"] = cortada
+    anotar(cli, "_vuelta", "error" if (fallados or mal or cortada) else "listo", resumen)
     di("=== vuelta en %d min: %d corrieron, %d fallaron, %d sin cambios. Salud: %s ==="
        % (resumen["minutos"], len(corridos), len(fallados), len(salteados),
           "sin leer" if mal is None else (", ".join(mal) if mal else "todo bien")))
+    if cortada:
+        di("=== VUELTA CORTADA %s ===" % cortada)
+        avisar_github("Vuelta del pulso cortada", cortada)
 
 
 if __name__ == "__main__":
