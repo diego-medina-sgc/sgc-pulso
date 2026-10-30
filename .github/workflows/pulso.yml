@@ -104,6 +104,7 @@ jobs:
           printf '%s' "$DRIVE_SERVICE_ACCOUNT" > build/service-account.json
 
       - name: Traer el estado
+        id: traer
         run: |
           cd build
           # sin cache (primera vez, o se vencio): del respaldo privado
@@ -149,6 +150,7 @@ jobs:
           python estado.py --conjunto escenas traer ../estado-escenas
 
       - name: Pulso
+        id: pulso
         env:
           # por variable y no pegado en el script: el valor no se interpreta
           PASO: ${{ inputs.paso }}
@@ -163,9 +165,20 @@ jobs:
           fi
           python -u pulso.py $ARGS
 
+      # GUARDAR AUNQUE FALLE PULSO (30/10/2026). Con success(), una excepcion
+      # de pulso.py despues de que los pasos ya escribieron sus .npz salteaba el
+      # guardado y se perdian horas de huellas. Cada paso corre en un proceso
+      # aparte que termina antes de que pulso.py siga, asi que si pulso.py
+      # falla, los .npz estan enteros. Lo que NO se guarda:
+      #   - si se cancelo o se vencio el tiempo (cancelled()): el paso que
+      #     estaba corriendo puede haber quedado a medio escribir;
+      #   - si "Traer el estado" no termino bien: build/ tendria un estado
+      #     vacio o a medias y pisaria al bueno en el bucket. Por eso no
+      #     always(), y por eso Pulso tiene que haber corrido (no 'skipped');
+      #   - en un ensayo.
       - name: Guardar el estado
         id: guardar
-        if: success() && inputs.ensayo != true
+        if: ${{ !cancelled() && steps.traer.outcome == 'success' && steps.pulso.outcome != 'skipped' && inputs.ensayo != true }}
         run: |
           cd build
           if python estado.py cambio ../estado; then
@@ -177,8 +190,10 @@ jobs:
           python estado.py subir ../estado
           echo "cambio=si" >> "$GITHUB_OUTPUT"
 
+      # Solo si "Guardar el estado" termino bien: si fallo entre cifrar y
+      # subir, la carpeta puede tener cifrado a medias.
       - name: Guardar la cache
-        if: success() && (steps.guardar.outputs.cambio == 'si' || steps.cache.outputs.cache-matched-key == '')
+        if: ${{ !cancelled() && steps.guardar.outcome == 'success' && (steps.guardar.outputs.cambio == 'si' || steps.cache.outputs.cache-matched-key == '') }}
         uses: actions/cache/save@v4
         with:
           path: estado
@@ -188,9 +203,15 @@ jobs:
       # a la cache solo cuando cambia la clave (cada 5 trozos o una vez por
       # dia, estado.py clave_cache): una copia entera por vuelta llenaria la
       # cache de Actions (10 GB) durante el llenado.
+      # Misma regla que el estado de caras. Si "Traer el estado de escenas"
+      # fallo (continue-on-error), no hay marca _escenas_estado.ok: el paso
+      # escenas no corrio y aca no se guarda nada; las caras se guardan igual
+      # (son otro conjunto, otra cache y otro prefijo del bucket). Si fallo
+      # "Traer el estado" de caras, todo lo de escenas queda 'skipped' y Pulso
+      # tambien: no se guarda ninguno de los dos.
       - name: Guardar el estado de escenas
         id: guardar_escenas
-        if: success() && inputs.ensayo != true
+        if: ${{ !cancelled() && steps.traer.outcome == 'success' && steps.pulso.outcome != 'skipped' && inputs.ensayo != true }}
         continue-on-error: true
         run: |
           cd build
@@ -210,7 +231,9 @@ jobs:
           echo "clave=$(python estado.py --conjunto escenas clave-cache ../estado-escenas)" >> "$GITHUB_OUTPUT"
 
       - name: Guardar la cache de escenas
-        if: success() && steps.guardar_escenas.outputs.cambio == 'si' && steps.guardar_escenas.outputs.clave != steps.cache_escenas.outputs.cache-matched-key
+        # outcome y no conclusion: con continue-on-error, un fallo queda
+        # 'success' en conclusion y 'failure' en outcome
+        if: ${{ !cancelled() && steps.guardar_escenas.outcome == 'success' && steps.guardar_escenas.outputs.cambio == 'si' && steps.guardar_escenas.outputs.clave != steps.cache_escenas.outputs.cache-matched-key }}
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
