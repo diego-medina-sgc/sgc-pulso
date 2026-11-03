@@ -591,8 +591,14 @@ class SB:
             method="PATCH", headers=self._headers({"Prefer": "return=minimal"}))
         self._pedir(req)
 
-    def upsert(self, tabla, filas, on_conflict=None, lote=500):
+    def upsert(self, tabla, filas, on_conflict=None, lote=500, ignorar=False):
         """Inserta o actualiza de a lotes; devuelve cuántas filas mandó.
+
+        ignorar=True: la fila que ya existe (por on_conflict) se deja como
+        esta, no se actualiza (resolution=ignore-duplicates). Es lo que
+        necesita quien agrega identificaciones sin derecho a pisar las que
+        ya hay: con merge, un par cargado por una persona o por otro paso
+        cambiaba de source al del que llegaba ultimo (3/11/2026).
 
         SIN FILAS REPETIDAS DENTRO DE UN MISMO LOTE
 
@@ -628,7 +634,8 @@ class SB:
         q = ("?" + urllib.parse.urlencode(params)) if params else ""
         pref = "return=minimal"
         if on_conflict:
-            pref = "resolution=merge-duplicates," + pref
+            pref = ("resolution=ignore-duplicates," if ignorar
+                    else "resolution=merge-duplicates,") + pref
         def mandar(trozo):
             req = urllib.request.Request(
                 "%s/rest/v1/%s%s" % (self.url, tabla, q),

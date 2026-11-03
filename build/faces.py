@@ -165,8 +165,14 @@ def npz(nombre):
 # 40.782 caras humanas, a 0,50: error 21,3% -> 0,62%, captura 78,4% -> 98,2%;
 # casi todo por tomar la persona de la pareja (foto, persona) y no de la foto
 # (con eso solo: 0,55% / 99,1%).
+#
+# 'epigrafe_cara' (3/11/2026, decision de Diego): la cara que el epigrafe de
+# una foto de grupo nombra CON POSICION (build/epigrafe_caras.py, siempre con
+# su recuadro en face_suggestions origen 'epigrafe'). Vale como carnet: solo
+# para quien no tiene ninguna cara humana. El epigrafe a nivel foto
+# ('epigrafe', sin recuadro) no es referencia.
 FUENTES_HUMANAS = ("game", "manual", "grupo")
-FUENTES_CARNET = ("filename", "mugshot_filename")
+FUENTES_CARNET = ("filename", "mugshot_filename", "epigrafe_cara")
 
 
 # UNA CARA EN DISPUTA NO ES REFERENCIA (15/10/2026)

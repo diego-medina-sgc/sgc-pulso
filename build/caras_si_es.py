@@ -9,9 +9,9 @@ Aprende de los "Sí, es": si la cara se parece a varias confirmadas, ya está.
 POR QUE
 
 Lo pidió Diego, y es el otro lado de caras_no_es.py: "lo mismo debería
-funcionar en los casos positivos. Si Persona H tiene 61 fotos, muchas
+funcionar en los casos positivos. Si Persona L tiene 61 fotos, muchas
 confirmadas y muchas por confirmar, para las que quedan pendientes ya debería
-aprender que ese es Persona H, tiene mucho para comparar".
+aprender que ese es Persona L, tiene mucho para comparar".
 
 Y remató con algo que hay que responder derecho: "ahora entiendo por qué no
 pre-aprueba, es porque el sistema no aprende".
@@ -40,7 +40,7 @@ Las caras de referencia salen de photo_people, y ahí hay de todo: lo que alguie
 contestó en el juego, lo que aprobó un script, lo que salió del nombre de un
 archivo. Para aprender se usan sólo las de source='game', que son las que miró
 una persona. Aprender de lo que aprobó un script es cómo se envenena una ficha:
-es exactamente la cadena que dejó a Persona I con cuatro caras de un nene.
+es exactamente la cadena que dejó a Persona M con cuatro caras de un nene.
 
 EL UMBRAL SALE DE LOS DATOS, NO DE MI
 

@@ -6,8 +6,8 @@
 
 POR QUE
 
-Diego, 13/9/2026, con el captcha de Persona J abierto: "la de la foto de
-la portada es Persona K". Un grupo mezclado le habia puesto el
+Diego, 13/9/2026, con el captcha de Persona N abierto: "la de la foto de
+la portada es Persona O". Un grupo mezclado le habia puesto el
 nombre de Lucila a carnets de Lanfranco. Las etiquetas de mas autoridad (nombre
 de archivo, un "si") ya se limpiaron con cara_de_otro
 (sql/resolver_captcha_respeta.sql). Quedaron 81 carnets no grupales con dos
@@ -153,8 +153,8 @@ def main():
         con_aut = [p for p in fuentes if autoridad(p)]
         # UNA SOLA ETIQUETA CON AUTORIDAD: gana ella, sin juez de cara.
         #
-        # Diego, 13/9/2026, con el carnet "Persona L Alcala.jpg" a nombre
-        # de Persona M (archivo) y de Persona N (cara): "confio en
+        # Diego, 13/9/2026, con el carnet "Persona P Alcala.jpg" a nombre
+        # de Persona Q (archivo) y de Persona R (cara): "confio en
         # lo que dice el nombre de archivo". La cara no podia decidir: las
         # referencias de "Pardini" eran fotos de Victoria. Si el nombre del
         # archivo dice quien es, una etiqueta de maquina en contra no es un

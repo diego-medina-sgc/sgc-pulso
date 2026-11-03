@@ -388,7 +388,7 @@ def main():
     # la cara. Sin recuadro pasan dos cosas y las dos son graves: la pantalla
     # muestra la foto entera en vez de la cara -en un acto de cuarenta personas
     # eso no es una pregunta contestable, que es justo lo que Diego marco con la
-    # foto de Persona B- y ademas las caras de una misma foto quedan todas
+    # foto de Persona F- y ademas las caras de una misma foto quedan todas
     # en (0,0,0,0), que para el indice unico son LA MISMA cara: de tres caras de
     # una foto se guardaba una sola. En la primera corrida se perdieron 6.654.
     #
@@ -610,7 +610,7 @@ def main():
     # que queda afuera de todo pedazo vuelve suelto, como en el corte de
     # cadenas de arriba.
     TOPE = 600
-    # UN GIGANTE COMPACTO NO SE PARTE (sql/grupos_compactos.sql). El de Persona C,
+    # UN GIGANTE COMPACTO NO SE PARTE (sql/grupos_compactos.sql). El de Persona G,
     # 1.846 caras de entregas de diplomas, tiene su 5% de caras mas flojas a
     # 0,866 del centro; las cadenas andan en 0,57-0,65. Si ese 5% llega a 0,80
     # es una persona y la base lo deja preguntar: partirlo solo haria pedazos

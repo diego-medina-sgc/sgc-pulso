@@ -8,13 +8,13 @@ Aprende de los "No es": una cara rechazada no se vuelve a preguntar.
 POR QUE
 
 Lo pidió Diego, y es la cosa más importante que pidió: "lo importante es que el
-sistema aprenda. Si me pregunta si Persona G es el segundo mejor 'x persona'
+sistema aprenda. Si me pregunta si Persona K es el segundo mejor 'x persona'
 me la muestra y le digo que no es, que no me vuelva a preguntar, porque ese 'x
-persona' ya no es Persona G".
+persona' ya no es Persona K".
 
 Hoy el "No es" se guarda como (esa foto, esa persona) y nada más. Si el mismo
 señor pelado aparece en otras veinte fotos de la misma fiesta, son veinte
-preguntas nuevas de "¿Es Persona G?", porque para el sistema esas veinte
+preguntas nuevas de "¿Es Persona K?", porque para el sistema esas veinte
 caras no tienen ninguna relación entre sí.
 
 LA REGLA
@@ -29,7 +29,7 @@ ofrece. Dos caras de la misma persona en la misma sesión pasan de 0,85 sin
 esfuerzo, y el máximo medido entre dos personas distintas fue 0,473.
 
 Y se compara sólo contra las propuestas de la MISMA persona: la pregunta que se
-quiere borrar es "¿es Persona G?", así que sólo importan las caras a las que
+quiere borrar es "¿es Persona K?", así que sólo importan las caras a las que
 se les propuso María.
 
 QUE NO HACE

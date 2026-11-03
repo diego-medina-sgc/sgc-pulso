@@ -6,7 +6,7 @@
 
 POR QUE
 
-Diego, 13/9/2026: la cara de Persona E en Whole School Acto 2024 no tenia
+Diego, 13/9/2026: la cara de Persona I en Whole School Acto 2024 no tenia
 recuadro. El detector la ve; el album nunca habia pasado entero por
 faces_eventos.py despues de que se empezaran a guardar todas las caras, y nada
 lo decia. Eran 13 albumes con el mismo agujero y 59 sin ninguna cara.

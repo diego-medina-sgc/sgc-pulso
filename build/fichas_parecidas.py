@@ -9,7 +9,7 @@ POR QUE
 El juego Fusionar (sql/fusionar_juego.sql) pone dos fichas lado a lado para que
 una persona decida si son la misma. Los candidatos salen del nombre
 (fichas_candidatas: un nombre contenido en el otro, o nombres muy parecidos),
-pero el nombre solo no alcanza: "Persona R" y "Persona S" pueden
+pero el nombre solo no alcanza: "Persona W" y "Persona X" pueden
 ser padre e hijo. La cara si ayuda: dos fichas de la misma persona tienen caras
 que se parecen.
 

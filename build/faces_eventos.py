@@ -62,7 +62,7 @@ UMBRAL = faces.umbral("eventos")
 #
 # Lo destapo Diego con una pregunta que no tenia respuesta: "¿Es Maria
 # Soloeta?" sobre la cara de un señor pelado con bigote. Y su diagnostico fue
-# el correcto: Persona G es una mujer, con pelo, con una foto clara y
+# el correcto: Persona K es una mujer, con pelo, con una foto clara y
 # nombrada, y con 34 caras de referencia que son todas ella. No es que el
 # sistema la confundio.
 #
@@ -105,8 +105,8 @@ MIN_CARAS = 6
 # las pidio Diego:
 #
 #   1. que el "No es" se aprenda. Hoy el rechazo se guarda como (esa foto, esa
-#      persona) y nada mas: "si le digo que no es Persona G, que no me
-#      vuelva a preguntar, porque ese ya no es Persona G". Para eso hay que
+#      persona) y nada mas: "si le digo que no es Persona K, que no me
+#      vuelva a preguntar, porque ese ya no es Persona K". Para eso hay que
 #      poder decir que la cara de la foto 823 y la de la 998 son el mismo
 #      senor, y eso se ve comparando las huellas.
 #
@@ -646,7 +646,7 @@ def main():
         # reciente.
         #
         # Lo encontro Diego con una foto de la Fiesta de Fin de Ano 2025:
-        # "¿por que no se reconocio a John en esta foto?". Persona P
+        # "¿por que no se reconocio a John en esta foto?". Persona U
         # tiene 19 caras de referencia y fotos identificadas de 2012 a 2023,
         # pero first_seen y last_seen le decian 2021 y 2021. Con el margen de
         # un ano eso lo hacia elegible entre 2020 y 2022 y nada mas: en 2025 no
@@ -670,7 +670,7 @@ def main():
             # Los 33 del staff que tienen camada fueron alumnos del colegio, y
             # de esos años hay fotos suyas de chico. Su cara de referencia es
             # la del adulto, asi que proponerla sobre una foto de 1995 es el
-            # mismo error de Persona I al revés. Es la regla que ya usan
+            # mismo error de Persona M al revés. Es la regla que ya usan
             # las colas -event_faces_pending filtra f.year > p.cohort- y aca
             # evita que la sugerencia llegue a existir.
             return g.get("cohort") is None or a.anio > g["cohort"]

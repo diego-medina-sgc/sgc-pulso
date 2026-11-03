@@ -3,7 +3,7 @@
 Agrupa los retratos por cara y propaga el nombre dentro de cada grupo.
 
 El mismo chico tiene retrato en cinco o seis años. Si en 2018 su archivo se
-llamaba "Persona O.jpg" y en 2015 se llamaba "AXN_0957.jpg", hoy el de
+llamaba "Persona T.jpg" y en 2015 se llamaba "AXN_0957.jpg", hoy el de
 2015 queda huerfano aunque sea la misma cara. Comparar cada pendiente contra
 los identificados no alcanza: hay que unir los pendientes ENTRE SI y despues
 dejar que el nombre viaje por el grupo.

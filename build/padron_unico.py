@@ -79,16 +79,16 @@ def nombre_que_gana(app, sheet, por_alias=False):
 
     Todas las diferencias de nombre son de acentos o mayusculas: la comparacion
     solo empareja cuando el nombre normalizado coincide. El sheet a veces los
-    agrega ("Persona AC" -> "Persona AC" con tilde) y a veces los
-    saca ("Persona AD" pierde las dos). Gana el que los tiene, venga
+    agrega ("Persona AH" -> "Persona AH" con tilde) y a veces los
+    saca ("Persona AI" pierde las dos). Gana el que los tiene, venga
     de donde venga; si empatan, queda el de la app, que es lo que alguien vio.
     Decision de Diego, 23/9/2026."""
     # SI EL MATCH VINO POR UN ALIAS, EL NOMBRE NO SE TOCA (23/9/2026)
     #
     # Un alias existe porque alguien -o el propio sistema al contestar una
     # dudosa- ya dijo "esta ficha tambien se llama asi". Eso no lo convierte en
-    # el nombre bueno: el sheet escribe "Persona AE" y la ficha se
-    # llama "Persona AF". Al resolver esa dudosa, la regla vieja renombro la
+    # el nombre bueno: el sheet escribe "Persona AJ" y la ficha se
+    # llama "Persona AK". Al resolver esa dudosa, la regla vieja renombro la
     # ficha con el error de tipeo del sheet.
     #
     # Asi que por alias se completa (house, camada, sede) pero no se renombra.
@@ -258,7 +258,7 @@ def parecidas(altas, por_clave):
     """De las altas, cuales se parecen a alguien que ya esta.
 
     Es la pregunta que decide si el sheet se puede aplicar: "Agustina Cabllero"
-    y "Persona AG" no son gente nueva, son Caballero y Canelotto mal
+    y "Persona AL" no son gente nueva, son Caballero y Canelotto mal
     tipeados. Darlos de alta seria crear el duplicado que acabamos de sacar.
 
     Se compara solo contra los que comparten alguna palabra -si no, son 1.600
@@ -286,11 +286,11 @@ def parecidas(altas, por_clave):
             r = difflib.SequenceMatcher(None, k, k2).ratio()
             # UNO CONTENIDO EN EL OTRO (23/9/2026)
             #
-            # difflib mira las letras, asi que "Persona AH Echegaray Santomil"
-            # y "Persona AI" dan 0,68 y pasaban como gente nueva: el
+            # difflib mira las letras, asi que "Persona AM Echegaray Santomil"
+            # y "Persona AN" dan 0,68 y pasaban como gente nueva: el
             # sheet trae el nombre legal completo y la app el corto. Entraron
             # 140 duplicados asi antes de que esto estuviera. Dos palabras de
-            # minimo para que "Persona U" no se coma a cualquier Juan.
+            # minimo para que "Persona Z" no se coma a cualquier Juan.
             pal2 = set(k2.split())
             if len(pal) >= 2 and len(pal2) >= 2 and (pal <= pal2 or pal2 <= pal):
                 r = max(r, 0.9)
@@ -305,7 +305,7 @@ def por_un_alias(nombre, por_alias):
     """La ficha cuyo ALIAS es casi este nombre.
 
     POR QUE (23/9/2026). Diego corrigio su nombre en el sheet -"Diego Alejadro
-    Medina" -> "Persona AJ"- y la lectura siguiente no lo reconocio:
+    Medina" -> "Persona AO"- y la lectura siguiente no lo reconocio:
     el alias guardaba la version con el error, asi que el nombre corregido
     parecia una persona nueva y volvia a la cola de dudosas. Preguntar dos veces
     lo mismo, y encima por una correccion, es al reves de lo que tiene que

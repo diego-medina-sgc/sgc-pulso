@@ -239,7 +239,7 @@ PASOS = [
     paso("padronunico",    ["padron_unico.py", "--aplicar"],
          ["drive:1wlAT6t-0f7m7ZvxbC4k_zT4etCH_Pl8HRYIU-_U7hDU"],
          quieto=False, cada_h=1),
-    # El nombre escrito en el archivo del carnet ("Persona AK 1.jpg") identifica
+    # El nombre escrito en el archivo del carnet ("Persona AP 1.jpg") identifica
     # a la persona sin que nadie lo corra a mano: cuando se renombra un archivo
     # en Drive o entra alguien nuevo al padron, la firma cambia y corre en la
     # misma vuelta (20/10/2026: un carnet renombrado el 19/10 seguia sin dueno
@@ -248,6 +248,31 @@ PASOS = [
     # referencias, para que su cara cuente en la misma vuelta.
     paso("nombres",        ["retratos_nombres.py", "--aplicar"], ["db:retratos_nombres"],
          quieto=False, cada_h=0),
+    # LOS NOMBRES DEL EPIGRAFE, A NIVEL FOTO (3/11/2026). Los .txt de las
+    # carpetas (carpeta_notas) cargan cada nombre que resuelve en una ficha
+    # como photo_people 'epigrafe' en su foto; solo inserta pares nuevos, no
+    # cambia el source de nada. Cursor propio en corridas (tarea 'epigrafes',
+    # etiqueta 'nombres'); el paso de abajo usa la etiqueta 'caras': son dos
+    # filas distintas (indice unico tarea, etiqueta). Va ANTES que
+    # "epigrafes": ese sube a 'epigrafe_cara' los pares con posicion. Sin
+    # entradas por lo mismo que el de abajo: pulso_firmas() no tiene
+    # carpeta_notas (y una entrada db: que no existe deja el paso "sin
+    # cambios" para siempre); sin notas nuevas lee dos tablas y sale.
+    paso("epigrafenombres", ["epigrafes.py", "--pulso", "--aplicar",
+                             "--igual-con-el-pulso"], [], quieto=False),
+    # LA CARA QUE NOMBRA EL EPIGRAFE (3/11/2026, CONTRATO.md 3 'epigrafe_cara').
+    # Los .txt de las carpetas los levanta el sync a carpeta_notas; esto une
+    # cada nombre con su cara por fila y escribe photo_people 'epigrafe_cara'
+    # + su recuadro (face_suggestions origen 'epigrafe'). Solo las notas con
+    # foto cuyo md5 no esta en el cursor (corridas, tarea 'epigrafes'): cada
+    # nota se procesa una vez por contenido, y si el .txt cambia, otra vez.
+    # Sin entradas porque pulso_firmas() no cuenta carpeta_notas: corre todas
+    # las vueltas y sin nada nuevo termina en segundos (lee 11 filas). Despues
+    # del padron (la ficha tiene que existir) y antes de referencias (la cara
+    # vale como carnet en la misma vuelta). quieto=False: escribe un par de
+    # filas por nota y no renumera nada.
+    paso("epigrafes",      ["epigrafe_caras.py", "--pulso", "--aplicar",
+                            "--igual-con-el-pulso"], [], quieto=False),
     # LA MISMA FOTO DOS VECES (22/10/2026). Las fotos que entraron en el
     # ultimo dia contra todo el archivo de su mismo tamaño, y un tramo del
     # barrido de todo el archivo (cursor en corridas, tarea 'duplicados'):

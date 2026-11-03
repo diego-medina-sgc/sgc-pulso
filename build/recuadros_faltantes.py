@@ -7,7 +7,7 @@
 POR QUE
 
 Diego: "algunos recuadros de las etiquetas estan en cualquier lado de la foto
-en vez de en la cara". Mandó una foto con "Persona AL" arriba a la
+en vez de en la cara". Mandó una foto con "Persona AQ" arriba a la
 izquierda, sobre el pasto.
 
 No era un error de dibujo: faltaba el dato. El 13/9/2026, de 25.984
@@ -152,8 +152,8 @@ def main():
         validar y para escribir: lo que se mide es lo que se aplica."""
         # "El grupo con ese nombre" SOLO no alcanza: validado el 13/9/2026
         # acerto 91,7% (1.529 de 1.668), contra 98,4% y 100% del parecido. Los
-        # grupos nombrados arrastran caras de otra persona -Persona J tenia
-        # 21 carnets de Persona K-. Se usa solo como desempate
+        # grupos nombrados arrastran caras de otra persona -Persona N tenia
+        # 21 carnets de Persona O-. Se usa solo como desempate
         # cuando el parecido no alcanza el margen pero la cara del grupo es la
         # mas parecida.
         exactas = [c for c in libres if nombre_grupo.get(int(c["grupo"])) == p]

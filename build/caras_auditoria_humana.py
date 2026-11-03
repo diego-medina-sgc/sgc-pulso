@@ -105,8 +105,8 @@ def main():
         de_retrato.setdefault(RF[i], i)
 
     # LA HUELLA DE LA CARA CONFIRMADA, NO LA DE LA PROPUESTA.
-    # Diego, 13/9/2026, sobre un "Si" de Persona D que la validacion
-    # marcaba como Persona E: "los veo bien etiquetados, cada uno en su
+    # Diego, 13/9/2026, sobre un "Si" de Persona H que la validacion
+    # marcaba como Persona I: "los veo bien etiquetados, cada uno en su
     # cara". _caras_evento guarda la cara que el reconocimiento PROPUSO para
     # (foto, persona); si la propuesta cayo sobre otra cara de la foto, se
     # juzgaba la cara equivocada. El recuadro de face_suggestions es el que se
@@ -209,7 +209,7 @@ def main():
             continue
         # 'manual' y 'game' las puso una persona aunque no haya un "Si" en
         # photo_labels (el visor reasigna sin pasar por ahi). El primer ensayo
-        # queria sacar dos 'manual' de Persona F: eso lo decide quien las
+        # queria sacar dos 'manual' de Persona J: eso lo decide quien las
         # puso, no una medicion.
         if src in ("manual", "game"):
             motivo["la puso una persona (manual/game): no se juzga"] += 1
