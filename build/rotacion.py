@@ -71,6 +71,9 @@ CARPETAS_POR_VUELTA = 600          # 42 s de listados, medido el 27/10/2026
                                    # 0,07 s por carpeta). El tope lo pone la
                                    # escritura, ~88 PATCH de 300 ids.
 REPASO_DIAS = 7
+# Cuantos ids de carpetas salteadas (404) se guardan en el mensaje del cursor.
+# El total va aparte en n_salteadas; los ids son para ir a buscarlas.
+SALTEADAS_TOPE = 50
 
 
 def leer_cursor(cli):
@@ -118,6 +121,11 @@ def tramo_del_pulso(cli):
         todas = [c for c in todas if c[0] > est["cursor"]]
     tramo = todas[:CARPETAS_POR_VUELTA]
     nuevo = {"pasada": int(est.get("pasada") or 1), "cursor": est.get("cursor")}
+    # las salteadas (404) se acumulan dentro de la pasada; una pasada nueva
+    # arranca limpia y las vuelve a probar
+    if est.get("salteadas"):
+        nuevo["salteadas"] = list(est["salteadas"])
+        nuevo["n_salteadas"] = int(est.get("n_salteadas") or len(est["salteadas"]))
     if tramo:
         nuevo["cursor"] = tramo[-1][0]
     if len(todas) <= CARPETAS_POR_VUELTA:
@@ -127,7 +135,15 @@ def tramo_del_pulso(cli):
 
 
 def fotos_de(drive, carpeta):
-    """{id de foto: rotation} de una carpeta de Drive. Solo imagenes."""
+    """{id de foto: rotation} de una carpeta de Drive. Solo imagenes.
+
+    None = Drive no encuentra la carpeta (404: borrada o sin permiso para la
+    cuenta de servicio, que Drive contesta igual). Esa carpeta se saltea y se
+    anota; no tira el tramo. Antes del 3/11/2026 un 404 levantaba excepcion
+    adentro de pool.map, el tramo entero moria y el cursor no avanzaba: la
+    vuelta siguiente repetia el mismo tramo y volvia a morir (20 vuelta
+    vueltas seguidas, del 29/10 al 3/11). Cualquier otro error de Drive sigue tirando
+    el tramo: puede ser pasajero y la vuelta siguiente lo repite."""
     out, tok = {}, None
     while True:
         p = {"q": "'%s' in parents and trashed=false and mimeType contains 'image/'" % carpeta,
@@ -135,7 +151,9 @@ def fotos_de(drive, carpeta):
              "includeItemsFromAllDrives": "true"}
         if tok:
             p["pageToken"] = tok
-        r = drive._pedir("GET", "files", params=p)
+        r = drive._pedir("GET", "files", params=p, ok_404=True)
+        if r is None:
+            return None
         for f in r.get("files", []):
             # Drive la lista como imagen: si no dice rotation, es 0 (ver arriba).
             rot = giro(f.get("imageMediaMetadata") or {})
@@ -151,8 +169,15 @@ def carpetas_con_fotos(cli, desde=None):
 
     Sale de folders.photo_count, no de leer las fotos pendientes: la lista de
     las 565.145 fotos sin rotation leida tarda 354 s y baja 28,8 MB (medido el
-    26/10/2026), y da las mismas carpetas."""
-    filas = cli.select("folders", select="id,photo_count", photo_count="gt.0") or []
+    26/10/2026), y da las mismas carpetas.
+
+    SOLO LAS DE DRIVE. Las carpetas de Zenfolio (id 'zf-...', 222 con 101.521
+    fotos el 3/11/2026) tambien tienen photo_count, pero no existen en Drive:
+    cada una da 404. Como 'zf-' ordena despues de todo id de Drive, quedaban al
+    final de la pasada y el ultimo tramo moria entero. La rotacion de Zenfolio
+    no la informa Drive; salud() solo cuenta las de Drive."""
+    filas = cli.select("folders", select="id,photo_count", photo_count="gt.0",
+                       source="eq.drive") or []
     ids = sorted(f["id"] for f in filas)
     if desde:
         ids = [i for i in ids if i >= desde]
@@ -245,9 +270,13 @@ def main():
     por_valor = collections.defaultdict(list)
     resumen = collections.Counter()
     detalle = []
+    salteadas = []
     with ThreadPoolExecutor(HILOS) as pool:
         for (cid, _), fotos in zip(objetivo, pool.map(
                 lambda kv: fotos_de(drive, kv[0]), objetivo)):
+            if fotos is None:
+                salteadas.append(cid)
+                continue
             for pid, r in sorted(fotos.items()):
                 # fotos_de ya resolvio el "Drive no lo informa" en 0: aca no
                 # llega nulo nunca, y toda foto listada se escribe.
@@ -260,6 +289,16 @@ def main():
              segundos / max(1, len(objetivo)), HILOS))
     for k, v in sorted(resumen.items()):
         print("   %-34s %d" % (k + ":", v))
+    if salteadas:
+        print("Salteadas: %d carpetas que Drive no encuentra (404): %s%s"
+              % (len(salteadas), ", ".join(salteadas[:10]),
+                 " ..." if len(salteadas) > 10 else ""))
+        if est_nuevo is not None:
+            previas = est_nuevo.get("salteadas") or []
+            nuevas = [c for c in salteadas if c not in previas]
+            est_nuevo["n_salteadas"] = int(est_nuevo.get("n_salteadas")
+                                           or len(previas)) + len(nuevas)
+            est_nuevo["salteadas"] = (previas + nuevas)[:SALTEADAS_TOPE]
     print("Para escribir: %d fotos" % sum(len(v) for v in por_valor.values()))
 
     sello = _dt.datetime.now().strftime("%Y%m%d_%H%M")
@@ -270,6 +309,8 @@ def main():
         fh.write("# carpeta\tfoto\trotation\n")
         for cid, pid, r in detalle:
             fh.write("%s\t%s\t%s\n" % (cid, pid, r))
+        for cid in salteadas:
+            fh.write("# salteada (404 en Drive): %s\n" % cid)
     print("Respaldo: %s" % respaldo)
 
     if not a.aplicar:

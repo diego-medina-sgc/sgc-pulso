@@ -254,25 +254,25 @@ PASOS = [
     # cambia el source de nada. Cursor propio en corridas (tarea 'epigrafes',
     # etiqueta 'nombres'); el paso de abajo usa la etiqueta 'caras': son dos
     # filas distintas (indice unico tarea, etiqueta). Va ANTES que
-    # "epigrafes": ese sube a 'epigrafe_cara' los pares con posicion. Sin
-    # entradas por lo mismo que el de abajo: pulso_firmas() no tiene
-    # carpeta_notas (y una entrada db: que no existe deja el paso "sin
-    # cambios" para siempre); sin notas nuevas lee dos tablas y sale.
+    # "epigrafes": ese sube a 'epigrafe_cara' los pares con posicion. Entrada
+    # db:notas (pulso_firmas, 3/11/2026): cuenta las notas y su ultima
+    # modificacion, las dudosas de epigrafe resueltas y las notas sin foto que
+    # ya tienen foto, asi corre cuando hay algo nuevo o algo que la destraba.
     paso("epigrafenombres", ["epigrafes.py", "--pulso", "--aplicar",
-                             "--igual-con-el-pulso"], [], quieto=False),
+                             "--igual-con-el-pulso"], ["db:notas"], quieto=False),
     # LA CARA QUE NOMBRA EL EPIGRAFE (3/11/2026, CONTRATO.md 3 'epigrafe_cara').
     # Los .txt de las carpetas los levanta el sync a carpeta_notas; esto une
     # cada nombre con su cara por fila y escribe photo_people 'epigrafe_cara'
     # + su recuadro (face_suggestions origen 'epigrafe'). Solo las notas con
     # foto cuyo md5 no esta en el cursor (corridas, tarea 'epigrafes'): cada
     # nota se procesa una vez por contenido, y si el .txt cambia, otra vez.
-    # Sin entradas porque pulso_firmas() no cuenta carpeta_notas: corre todas
-    # las vueltas y sin nada nuevo termina en segundos (lee 11 filas). Despues
+    # Entrada db:notas, la misma del paso de arriba: corre cuando cambian las
+    # notas o lo que las destraba, no en cada vuelta. Despues
     # del padron (la ficha tiene que existir) y antes de referencias (la cara
     # vale como carnet en la misma vuelta). quieto=False: escribe un par de
     # filas por nota y no renumera nada.
     paso("epigrafes",      ["epigrafe_caras.py", "--pulso", "--aplicar",
-                            "--igual-con-el-pulso"], [], quieto=False),
+                            "--igual-con-el-pulso"], ["db:notas"], quieto=False),
     # LA MISMA FOTO DOS VECES (22/10/2026). Las fotos que entraron en el
     # ultimo dia contra todo el archivo de su mismo tamaño, y un tramo del
     # barrido de todo el archivo (cursor en corridas, tarea 'duplicados'):
