@@ -346,7 +346,7 @@ def confiable(pal, txt):
     # Diaz Valdez Vaz Pinto"- y son cinco fichas. Ninguna tiene siete.
     if len(pal) > 6:
         return False
-    # Y un nombre no empieza con puntuacion: "-angeles Grosz- cronofotografia".
+    # Y un nombre no empieza con puntuacion: "-Persona CH- cronofotografia".
     if (txt or "").strip()[:1] in ".-,;:|":
         return False
     return True
