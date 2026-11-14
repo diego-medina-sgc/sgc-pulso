@@ -257,6 +257,16 @@ def nombres_de(texto):
                     limpio = TITULO.sub("", crudo).strip()
                     toks = limpio.split()
                     inis = [t for t in toks if INICIAL.match(t)]
+                    # NOMBRE COMPLETO + INICIAL + APELLIDO (13/11/2026). Con
+                    # "Nombre X Apellido" la X se tomaba por la inicial y el
+                    # nombre de pila pasaba a ser parte del apellido: no
+                    # cruzaba nunca (medido en el Georgian 2004 escaneado). Si
+                    # el primero es un nombre escrito entero, la inicial del
+                    # medio se descarta y manda el nombre de pila.
+                    completas = [t for t in toks if t not in inis]
+                    if inis and toks and not INICIAL.match(toks[0]) \
+                            and len(completas) >= 2:
+                        toks, inis = completas, []
                     if inis or len(toks) < 2:
                         apellido = " ".join(t for t in toks if t not in inis)
                         ini = sin_tildes(inis[0])[:1] if inis else ""
