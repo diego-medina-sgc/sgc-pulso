@@ -1086,10 +1086,20 @@ def anotar_error(supa, a, fuente, e):
         pass
 
 
+def _nombre_log(f):
+    """Como se nombra una fuente en el log (19/11/2026).
+    En GitHub Actions el log del repo publico sgc-pulso lo puede leer cualquiera,
+    y muchas fuentes son carpetas de retratos con nombre y apellido de alumnos.
+    Ahi va solo el comienzo del id de Drive; en la PC, el nombre de siempre."""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        return "fuente " + str(f.get("id") or "?")[:8]
+    return f["nombre"]
+
+
 def _una_carpeta(drive, supa, f, a, state):
     """Una fuente carpeta dentro de un hilo: lo que imprime queda en su buffer
     y una falla vuelve como dato, no tira el lote."""
-    _HILO.buf = ["\n== %s (%s, %s)" % (f["nombre"], f["sede"], f["raiz"])]
+    _HILO.buf = ["\n== %s (%s, %s)" % (_nombre_log(f), f["sede"], f["raiz"])]
     try:
         cambios, fila = sync_carpeta(drive, supa, f, a, state)
         return f, cambios, fila, None, _HILO.buf
@@ -1111,11 +1121,11 @@ def pasada(drive, supa, fuentes, a):
     # las unidades primero y en fila: son dos y cada una ya es un solo registro
     # de cambios
     for f in [f for f in fuentes if f["raiz"] == "unidad"]:
-        print("\n== %s (%s, %s)" % (f["nombre"], f["sede"], f["raiz"]))
+        print("\n== %s (%s, %s)" % (_nombre_log(f), f["sede"], f["raiz"]))
         try:
             cambios = sync_unidad(drive, supa, f, a, estados.get(estado_id(f), {})) or cambios
         except Exception as e:
-            fallas.append(f["nombre"])
+            fallas.append(_nombre_log(f))
             print("  FALLO: %s" % str(e)[:400])
             anotar_error(supa, a, f, e)
 
@@ -1141,7 +1151,7 @@ def pasada(drive, supa, fuentes, a):
                 print("\n".join(buf))
                 cambios = cambio or cambios
                 if error is not None:
-                    fallas.append(f["nombre"])
+                    fallas.append(_nombre_log(f))
                     anotar_error(supa, a, f, error)
                 elif fila:
                     filas_ok.append(fila)
